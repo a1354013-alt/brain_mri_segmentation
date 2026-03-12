@@ -1,5 +1,5 @@
 """
-Training module with enhanced checkpointing and Pathlib support
+Training module with scheduler checkpointing and parameterized threshold
 """
 import csv
 import torch
@@ -104,16 +104,18 @@ class Trainer:
                 outputs = self.model(images)
                 val_loss += self.criterion(outputs, masks).item()
                 
-                preds = (torch.sigmoid(outputs) > 0.5).float()
+                # 使用 config.THRESHOLD
+                preds = (torch.sigmoid(outputs) > config.THRESHOLD).float()
                 val_dice += dice_coeff(preds, masks).item()
         return val_loss / len(self.val_loader), val_dice / len(self.val_loader)
     
     def save_checkpoints(self, epoch: int, dice: float) -> None:
-        # 1. 儲存完整 Checkpoint
+        # 1. 儲存完整 Checkpoint (包含 scheduler)
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict(),
             'dice': dice,
             'history': self.history
         }

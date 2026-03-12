@@ -6,7 +6,7 @@ import random
 import numpy as np
 from pathlib import Path
 
-# ==================== 路徑設定 (Pathlib 化) ====================
+# ==================== 路徑設定 ====================
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "data" / "Brats"
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
@@ -19,11 +19,13 @@ TENSORBOARD_DIR = OUTPUT_DIR / "tensorboard"
 DEMO_OUTPUT_DIR = OUTPUT_DIR / "demo"
 DEMO_CHECKPOINT_PATH = DEMO_OUTPUT_DIR / "best_checkpoint_demo.pth"
 DEMO_MODEL_STATE_PATH = DEMO_OUTPUT_DIR / "best_model_state_demo.pth"
+DEMO_TENSORBOARD_DIR = DEMO_OUTPUT_DIR / "tensorboard"
 
 # ==================== 模型參數 ====================
 N_CHANNELS = 4  # FLAIR, T1, T1ce, T2
 N_CLASSES = 1   # Binary segmentation (Whole Tumor)
 DROPOUT_P = 0.2
+THRESHOLD = 0.5
 
 # ==================== 訓練參數 ====================
 IMAGE_SIZE = 128

@@ -1,5 +1,5 @@
 """
-Visualization utilities with enhanced MC Dropout
+Visualization utilities with parameterized threshold and MC Dropout
 """
 import matplotlib.pyplot as plt
 import torch
@@ -22,7 +22,7 @@ def enable_dropout(model: nn.Module) -> None:
 def mc_dropout_inference(
     model: nn.Module, 
     image_tensor: torch.Tensor, 
-    n_iterations: int = 20, 
+    n_iterations: int = config.MC_ITERATIONS, 
     device: torch.device = config.DEVICE,
     method: str = 'var'
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -30,7 +30,7 @@ def mc_dropout_inference(
     MC Dropout 推論
     """
     model.eval()
-    enable_dropout(model) # 僅啟用 Dropout
+    enable_dropout(model)
     
     preds = []
     with torch.no_grad():
@@ -43,14 +43,13 @@ def mc_dropout_inference(
     mean_pred = np.mean(preds, axis=0)
     
     if method == 'entropy':
-        # Predictive Entropy: -p*log(p) - (1-p)*log(1-p)
         p = np.clip(mean_pred, 1e-8, 1.0 - 1e-8)
         uncertainty = -(p * np.log(p) + (1 - p) * np.log(1 - p))
     else:
-        # Variance
         uncertainty = np.var(preds, axis=0)
     
-    prediction = (mean_pred > 0.5).astype(np.float32)
+    # 使用 config.THRESHOLD
+    prediction = (mean_pred > config.THRESHOLD).astype(np.float32)
     return prediction, uncertainty
 
 
@@ -75,7 +74,7 @@ def plot_results_with_uncertainty(
     # Overlay
     overlay = np.stack([image[0]]*3, axis=-1)
     overlay = (overlay - overlay.min()) / (overlay.max() - overlay.min() + 1e-8)
-    overlay[prediction[0] > 0.5, 0] = 1.0 # Red
+    overlay[prediction[0] > config.THRESHOLD, 0] = 1.0 # Red
     axes[4].imshow(overlay); axes[4].set_title("Overlay"); axes[4].axis('off')
     
     plt.suptitle(title, fontsize=16, fontweight='bold')

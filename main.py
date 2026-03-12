@@ -1,9 +1,10 @@
 """
-Main CLI for Brain MRI Segmentation Project
+Main CLI for Brain MRI Segmentation Project with robust data handling
 """
 import argparse
 import torch
 import numpy as np
+import random
 from torch.utils.data import DataLoader
 from pathlib import Path
 
@@ -11,6 +12,15 @@ import config
 from models import AttentionUNet
 from utils import BraTSDataset, mc_dropout_inference, plot_results_with_uncertainty
 from train import Trainer
+
+
+def worker_init_fn(worker_id):
+    """
+    修正多 worker RNG 問題
+    """
+    seed = config.RANDOM_SEED + worker_id
+    np.random.seed(seed)
+    random.seed(seed)
 
 
 def get_patient_ids(data_dir: Path) -> list:
@@ -25,9 +35,10 @@ def train_command(args):
     config.set_seed()
     
     patient_ids = get_patient_ids(config.DATA_DIR)
-    if not patient_ids: return
+    if len(patient_ids) == 0:
+        print("❌ No data found in DATA_DIR. Please run download script first.")
+        return
 
-    # 2. Shuffle 且可重現
     rng = np.random.default_rng(config.RANDOM_SEED)
     rng.shuffle(patient_ids)
     
@@ -38,8 +49,15 @@ def train_command(args):
     train_dataset = BraTSDataset(config.DATA_DIR, train_ids, config.IMAGE_SIZE, mode='train')
     val_dataset = BraTSDataset(config.DATA_DIR, val_ids, config.IMAGE_SIZE, mode='val')
     
-    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, num_workers=config.NUM_WORKERS)
-    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE, shuffle=False, num_workers=config.NUM_WORKERS)
+    # 加入 worker_init_fn
+    train_loader = DataLoader(
+        train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, 
+        num_workers=config.NUM_WORKERS, worker_init_fn=worker_init_fn
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=config.BATCH_SIZE, shuffle=False, 
+        num_workers=config.NUM_WORKERS, worker_init_fn=worker_init_fn
+    )
     
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
     
@@ -53,7 +71,6 @@ def train_command(args):
 def infer_command(args):
     print("\n🔍 Inference Mode")
     
-    # 4. Checkpoint 讀取邏輯
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
     
     if config.MODEL_STATE_PATH.exists():
@@ -68,12 +85,23 @@ def infer_command(args):
         return
 
     patient_ids = get_patient_ids(config.DATA_DIR)
+    if len(patient_ids) == 0:
+        print("❌ No data found in DATA_DIR.")
+        return
+        
     target_patient = args.patient_id if args.patient_id else patient_ids[0]
     
     dataset = BraTSDataset(config.DATA_DIR, [target_patient], config.IMAGE_SIZE, mode='val')
+    if len(dataset) == 0:
+        print(f"❌ Patient {target_patient} not found or invalid.")
+        return
+        
     image, mask = dataset[0]
     
-    prediction, uncertainty = mc_dropout_inference(model, image.unsqueeze(0), method=args.uncertainty)
+    # 使用 config.MC_ITERATIONS
+    prediction, uncertainty = mc_dropout_inference(
+        model, image.unsqueeze(0), n_iterations=config.MC_ITERATIONS, method=args.uncertainty
+    )
     
     save_path = config.OUTPUT_DIR / "inference" / f"{target_patient}_seg.png"
     plot_results_with_uncertainty(image.numpy(), mask.numpy(), prediction[0], uncertainty[0], save_path=save_path)
@@ -85,14 +113,18 @@ def demo_command(args):
     config.set_seed()
     
     patient_ids = get_patient_ids(config.DATA_DIR)
+    if len(patient_ids) == 0:
+        print("❌ No data found in DATA_DIR.")
+        return
+        
     demo_ids = patient_ids[:min(2, len(patient_ids))]
     
-    # 3. Demo 模式隔離
     train_dataset = BraTSDataset(config.DATA_DIR, demo_ids, config.IMAGE_SIZE, mode='train')
-    train_loader = DataLoader(train_dataset, batch_size=1)
+    train_loader = DataLoader(train_dataset, batch_size=1, worker_init_fn=worker_init_fn)
     
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
     
+    # Demo 模式輸出隔離
     trainer = Trainer(
         model=model, train_loader=train_loader, val_loader=train_loader, device=config.DEVICE,
         output_dir=config.DEMO_OUTPUT_DIR, checkpoint_path=config.DEMO_CHECKPOINT_PATH, model_state_path=config.DEMO_MODEL_STATE_PATH,
@@ -102,7 +134,7 @@ def demo_command(args):
     
     # Demo 推論
     image, mask = train_dataset[0]
-    prediction, uncertainty = mc_dropout_inference(model, image.unsqueeze(0))
+    prediction, uncertainty = mc_dropout_inference(model, image.unsqueeze(0), n_iterations=5)
     save_path = config.DEMO_OUTPUT_DIR / "demo_inference.png"
     plot_results_with_uncertainty(image.numpy(), mask.numpy(), prediction[0], uncertainty[0], save_path=save_path)
     print(f"✅ Demo completed. Results in {config.DEMO_OUTPUT_DIR}")

@@ -1,26 +1,35 @@
-# Brain MRI Tumor Segmentation (v2.1)
+# Brain MRI Tumor Segmentation (v2.2)
 
 基於 **Attention U-Net** 的腦部 MRI 腫瘤分割專案，支援不確定性估計與高效 I/O。
 
 ---
 
-## 📋 專案更新亮點 (v2.1)
+## 📋 專案更新亮點 (v2.2)
 
-- **Pathlib 全面化**：解決不同工作目錄下的路徑引用問題。
-- **Patient-level Split**：資料切分以病人為單位，並透過固定隨機種子 (`RANDOM_SEED`) 確保可重現性。
-- **Dataset I/O 優化**：
-  - 初始化時自動檢查資料完整性（需包含 FLAIR 與 Seg）。
-  - 預先計算並快取腫瘤切片索引，大幅提升訓練速度。
-  - **訓練策略**：從含腫瘤切片中隨機抽樣。
-  - **驗證策略**：固定使用腫瘤像素最多的切片，確保評估穩定。
-- **任務定義**：預設執行 **Whole Tumor (WT)** 二元分割（Mask > 0）。
-- **Checkpoint 雙重儲存**：
-  - `best_checkpoint.pth`：包含模型、優化器、排程器與歷史記錄。
-  - `best_model_state.pth`：僅包含模型權重，便於部署與推論。
-- **MC Dropout 強化**：
-  - 支援 `var` (變異數) 與 `entropy` (預測熵) 兩種不確定性指標。
-  - 嚴格控制 BatchNorm 不受推論隨機性影響。
-- **輸入尺寸保護**：模型內建 Padding 機制，支援非 2 的冪次方尺寸輸入。
+- **資料完整性強化**：本專案嚴格要求 **4 模態 (flair, t1, t1ce, t2) + seg**。`dataset.py` 會自動過濾不完整的病人資料。
+- **多 Worker RNG 修正**：修正了 DataLoader 在多 worker 模式下隨機切片重複的問題。透過 `worker_init_fn` 確保每個 worker 擁有獨立且可重現的隨機種子。
+- **全面參數 Config 化**：`THRESHOLD` (預設 0.5) 與 `MC_ITERATIONS` (預設 20) 已移至 `config.py`，修改後會即時影響訓練評估與推論行為。
+- **跨平台資料對齊**：`download_brats.py` 改用 Python `zipfile` 進行解壓，並具備自動結構對齊功能，確保資料夾結構符合 `data/Brats/<patient_id>/...`。
+- **Checkpoint 一致性**：`best_checkpoint.pth` 現在完整包含 `scheduler_state_dict`，確保訓練可恢復性。
+- **模型尺寸保護**：內建 Padding Helper，自動對齊 Encoder/Decoder 尺寸，避免非 2 的冪次方輸入導致崩潰。
+- **空資料保護**：所有 CLI 命令均加入空資料檢查，避免 IndexError。
+
+---
+
+## 🏗️ 技術細節
+
+### 1. 任務定義
+本專案執行 **Whole Tumor (WT)** 二元分割。所有標籤值大於 0 的區域均被視為腫瘤區域。
+
+### 2. 切分策略
+採用 **Patient-level Split**。首先對所有病人 ID 進行隨機洗牌 (`shuffle`)，再依比例切分。這確保了同一病人的不同切片不會同時出現在訓練集與驗證集中，避免資料洩漏。
+
+### 3. 可重現性說明
+專案預設開啟 `torch.backends.cudnn.deterministic = True`。這能確保實驗結果的可重現性，但在某些 GPU 環境下可能會略微降低運算速度。
+
+### 4. Resize 策略
+- **影像 (Image)**：使用 `order=1` (Bilinear) 並開啟 `anti_aliasing=True` 以保持細節。
+- **標籤 (Mask)**：使用 `order=0` (Nearest Neighbor) 以確保標籤值保持為二元。
 
 ---
 
@@ -31,43 +40,37 @@
 pip install -r requirements.txt
 ```
 
-### 2. 訓練與推論
+### 2. 資料準備
 ```bash
-# 訓練模式 (自動執行 Patient-level shuffle split)
-python main.py train
-
-# 推論模式 (支援不同不確定性指標)
-python main.py infer --uncertainty entropy
-
-# Demo 模式 (輸出隔離至 outputs/demo/，不覆蓋正式結果)
-python main.py demo
+# 自動下載並對齊結構
+python scripts/download_brats.py --auto
 ```
 
----
+### 3. 執行命令
+```bash
+# 訓練模式
+python main.py train
 
-## 🏗️ 技術細節
+# 推論模式
+python main.py infer --patient_id BraTS20_Training_001 --uncertainty entropy
 
-### 資料切分 (Patient-level Split)
-為了避免資料洩漏，我們在病人層級進行切分。使用 `np.random.default_rng(config.RANDOM_SEED)` 對病人 ID 進行洗牌，確保每次運行得到的訓練/驗證集完全一致。
-
-### MC Dropout 不確定性
-推論時透過 `enable_dropout(model)` 僅開啟 Dropout 層，同時保持 `model.eval()` 狀態以固定 BatchNorm 的統計量。
-- **Variance**: 衡量預測值的離散程度。
-- **Entropy**: 衡量預測機率的分佈混亂度，適合量化分類不確定性。
+# Demo 模式 (輸出隔離至 outputs/demo/)
+python main.py demo
+```
 
 ---
 
 ## 📁 專案結構
 ```
 brain_mri_segmentation/
-├── config.py              # 專案根目錄與路徑配置
-├── main.py                # CLI 入口
-├── train.py               # 訓練邏輯與 Checkpoint 管理
+├── config.py              # 全面參數配置
+├── main.py                # CLI 入口 (含 Worker RNG 修正)
+├── train.py               # 訓練邏輯 (含 Scheduler Checkpoint)
 ├── models/
-│   └── attention_unet.py  # 具備尺寸保護的模型
+│   └── attention_unet.py  # 具備尺寸對齊保護的模型
 ├── utils/
-│   ├── dataset.py         # 高效 I/O 與完整性檢查
-│   └── visualize.py       # 強化版視覺化與 MC Dropout
-└── outputs/               # 正式輸出
-    └── demo/              # Demo 模式專屬輸出
+│   ├── dataset.py         # 4 模態檢查與 RNG 優化
+│   └── visualize.py       # 參數化視覺化
+└── scripts/
+    └── download_brats.py  # 跨平台解壓與結構對齊
 ```

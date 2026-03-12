@@ -1,5 +1,5 @@
 """
-Attention U-Net implementation with input size protection
+Attention U-Net implementation with robust input size protection
 """
 import torch
 import torch.nn as nn
@@ -85,13 +85,15 @@ class AttentionUNet(nn.Module):
 
         self.outc = nn.Conv2d(64, n_classes, kernel_size=1)
 
-    def _match_and_concat(self, x_skip: torch.Tensor, x_up: torch.Tensor) -> torch.Tensor:
+    def _align_and_concat(self, x_skip: torch.Tensor, x_up: torch.Tensor) -> torch.Tensor:
         """
-        輸入尺寸保護：若 H/W 不一致，對 x_up 進行 Padding 以對齊 x_skip
+        對齊保護：若尺寸不一致，對 x_up 進行 Padding 以對齊 x_skip
         """
         if x_skip.shape[2:] != x_up.shape[2:]:
             diff_y = x_skip.size()[2] - x_up.size()[2]
             diff_x = x_skip.size()[3] - x_up.size()[3]
+            
+            # 使用 F.pad 進行對齊 (left, right, top, bottom)
             x_up = F.pad(x_up, [diff_x // 2, diff_x - diff_x // 2,
                                 diff_y // 2, diff_y - diff_y // 2])
         return torch.cat([x_skip, x_up], dim=1)
@@ -106,25 +108,25 @@ class AttentionUNet(nn.Module):
         # Center
         c = self.center(self.maxpool4(e4))
         
-        # Decoder with Attention & Size Protection
+        # Decoder with Attention & Alignment Protection
         d4 = self.up4(c)
         x4 = self.att4(g=d4, x=e4)
-        d4 = self._match_and_concat(x4, d4)
+        d4 = self._align_and_concat(x4, d4)
         d4 = self.up_conv4(d4)
 
         d3 = self.up3(d4)
         x3 = self.att3(g=d3, x=e3)
-        d3 = self._match_and_concat(x3, d3)
+        d3 = self._align_and_concat(x3, d3)
         d3 = self.up_conv3(d3)
 
         d2 = self.up2(d3)
         x2 = self.att2(g=d2, x=e2)
-        d2 = self._match_and_concat(x2, d2)
+        d2 = self._align_and_concat(x2, d2)
         d2 = self.up_conv2(d2)
 
         d1 = self.up1(d2)
         x1 = self.att1(g=d1, x=e1)
-        d1 = self._match_and_concat(x1, d1)
+        d1 = self._align_and_concat(x1, d1)
         d1 = self.up_conv1(d1)
 
         return self.outc(d1)
