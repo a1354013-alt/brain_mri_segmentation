@@ -1,16 +1,12 @@
 """
-Attention U-Net implementation for medical image segmentation
+Attention U-Net implementation with input size protection
 """
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple
 
 
 class ConvBlock(nn.Module):
-    """
-    雙層卷積塊，包含 BatchNorm 和 Dropout
-    """
     def __init__(self, in_channels: int, out_channels: int, dropout_p: float = 0.2):
         super().__init__()
         self.conv = nn.Sequential(
@@ -28,14 +24,6 @@ class ConvBlock(nn.Module):
 
 
 class AttentionGate(nn.Module):
-    """
-    Attention Gate 實作
-    
-    Args:
-        F_g: gating signal 的通道數
-        F_l: skip connection 的通道數
-        F_int: 中間層的通道數
-    """
     def __init__(self, F_g: int, F_l: int, F_int: int):
         super().__init__()
         self.W_g = nn.Sequential(
@@ -54,11 +42,6 @@ class AttentionGate(nn.Module):
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, g: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            g: gating signal from deeper layer
-            x: skip connection from encoder
-        """
         g1 = self.W_g(g)
         x1 = self.W_x(x)
         psi = self.relu(g1 + x1)
@@ -67,36 +50,23 @@ class AttentionGate(nn.Module):
 
 
 class AttentionUNet(nn.Module):
-    """
-    Attention U-Net 模型
-    
-    Args:
-        n_channels: 輸入影像通道數
-        n_classes: 輸出類別數
-        dropout_p: Dropout 機率
-    """
     def __init__(self, n_channels: int = 4, n_classes: int = 1, dropout_p: float = 0.2):
         super().__init__()
-        self.n_channels = n_channels
-        self.n_classes = n_classes
-
+        
         # Encoder
         self.conv1 = ConvBlock(n_channels, 64, dropout_p)
         self.maxpool1 = nn.MaxPool2d(kernel_size=2, stride=2)
-        
         self.conv2 = ConvBlock(64, 128, dropout_p)
         self.maxpool2 = nn.MaxPool2d(kernel_size=2, stride=2)
-        
         self.conv3 = ConvBlock(128, 256, dropout_p)
         self.maxpool3 = nn.MaxPool2d(kernel_size=2, stride=2)
-        
         self.conv4 = ConvBlock(256, 512, dropout_p)
         self.maxpool4 = nn.MaxPool2d(kernel_size=2, stride=2)
         
         # Center
         self.center = ConvBlock(512, 1024, dropout_p)
         
-        # Decoder + Attention (移除重複定義)
+        # Decoder
         self.up4 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)
         self.att4 = AttentionGate(F_g=512, F_l=512, F_int=256)
         self.up_conv4 = ConvBlock(1024, 512, dropout_p)
@@ -115,16 +85,18 @@ class AttentionUNet(nn.Module):
 
         self.outc = nn.Conv2d(64, n_classes, kernel_size=1)
 
+    def _match_and_concat(self, x_skip: torch.Tensor, x_up: torch.Tensor) -> torch.Tensor:
+        """
+        輸入尺寸保護：若 H/W 不一致，對 x_up 進行 Padding 以對齊 x_skip
+        """
+        if x_skip.shape[2:] != x_up.shape[2:]:
+            diff_y = x_skip.size()[2] - x_up.size()[2]
+            diff_x = x_skip.size()[3] - x_up.size()[3]
+            x_up = F.pad(x_up, [diff_x // 2, diff_x - diff_x // 2,
+                                diff_y // 2, diff_y - diff_y // 2])
+        return torch.cat([x_skip, x_up], dim=1)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass
-        
-        Args:
-            x: Input tensor of shape (B, C, H, W)
-            
-        Returns:
-            Output tensor of shape (B, n_classes, H, W)
-        """
         # Encoder
         e1 = self.conv1(x)
         e2 = self.conv2(self.maxpool1(e1))
@@ -134,35 +106,25 @@ class AttentionUNet(nn.Module):
         # Center
         c = self.center(self.maxpool4(e4))
         
-        # Decoder with Attention
+        # Decoder with Attention & Size Protection
         d4 = self.up4(c)
         x4 = self.att4(g=d4, x=e4)
-        d4 = torch.cat((x4, d4), dim=1)
+        d4 = self._match_and_concat(x4, d4)
         d4 = self.up_conv4(d4)
 
         d3 = self.up3(d4)
         x3 = self.att3(g=d3, x=e3)
-        d3 = torch.cat((x3, d3), dim=1)
+        d3 = self._match_and_concat(x3, d3)
         d3 = self.up_conv3(d3)
 
         d2 = self.up2(d3)
         x2 = self.att2(g=d2, x=e2)
-        d2 = torch.cat((x2, d2), dim=1)
+        d2 = self._match_and_concat(x2, d2)
         d2 = self.up_conv2(d2)
 
         d1 = self.up1(d2)
         x1 = self.att1(g=d1, x=e1)
-        d1 = torch.cat((x1, d1), dim=1)
+        d1 = self._match_and_concat(x1, d1)
         d1 = self.up_conv1(d1)
 
-        out = self.outc(d1)
-        return out
-    
-    def enable_dropout(self) -> None:
-        """
-        啟用 Dropout 層用於 MC Dropout 推論
-        保持 BatchNorm 在 eval 模式
-        """
-        for module in self.modules():
-            if isinstance(module, nn.Dropout2d):
-                module.train()
+        return self.outc(d1)

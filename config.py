@@ -4,17 +4,25 @@ Configuration file for Brain MRI Segmentation Project
 import torch
 import random
 import numpy as np
+from pathlib import Path
 
-# ==================== 路徑設定 ====================
-DATA_DIR = "data/Brats"
-OUTPUT_DIR = "outputs"
-MODEL_SAVE_PATH = "outputs/best_model.pth"
-LOG_FILE = "outputs/training_log.csv"
-TENSORBOARD_DIR = "outputs/tensorboard"
+# ==================== 路徑設定 (Pathlib 化) ====================
+PROJECT_ROOT = Path(__file__).resolve().parent
+DATA_DIR = PROJECT_ROOT / "data" / "Brats"
+OUTPUT_DIR = PROJECT_ROOT / "outputs"
+CHECKPOINT_PATH = OUTPUT_DIR / "best_checkpoint.pth"
+MODEL_STATE_PATH = OUTPUT_DIR / "best_model_state.pth"
+LOG_FILE = OUTPUT_DIR / "training_log.csv"
+TENSORBOARD_DIR = OUTPUT_DIR / "tensorboard"
+
+# Demo 模式路徑
+DEMO_OUTPUT_DIR = OUTPUT_DIR / "demo"
+DEMO_CHECKPOINT_PATH = DEMO_OUTPUT_DIR / "best_checkpoint_demo.pth"
+DEMO_MODEL_STATE_PATH = DEMO_OUTPUT_DIR / "best_model_state_demo.pth"
 
 # ==================== 模型參數 ====================
 N_CHANNELS = 4  # FLAIR, T1, T1ce, T2
-N_CLASSES = 1   # Binary segmentation
+N_CLASSES = 1   # Binary segmentation (Whole Tumor)
 DROPOUT_P = 0.2
 
 # ==================== 訓練參數 ====================
@@ -41,9 +49,6 @@ RANDOM_SEED = 42
 def set_seed(seed: int = RANDOM_SEED) -> None:
     """
     固定所有隨機種子以確保可重現性
-    
-    Args:
-        seed: 隨機種子值
     """
     random.seed(seed)
     np.random.seed(seed)
