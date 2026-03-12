@@ -1,116 +1,335 @@
+"""
+Main CLI for Brain MRI Segmentation Project
+
+Usage:
+    python main.py train    - Train the model
+    python main.py infer    - Run inference on a single patient
+    python main.py demo     - Run a quick demo with 1 epoch
+"""
 import os
+import sys
+import argparse
 import torch
-from torch.utils.data import DataLoader, random_split
-from models.attention_unet import AttentionUNet
-from utils.dataset import BraTSDataset
-from train import train_model
-from utils.visualize import mc_dropout_inference, plot_results_with_uncertainty
-import nibabel as nib
-import numpy as np
+from torch.utils.data import DataLoader
+from pathlib import Path
 
-# --- 專案設定 ---
-DATA_DIR = "data/BraTS2020_TrainingData" # 假設資料已下載並解壓縮至此
-MODEL_PATH = "models/attention_unet_brats_model.pth"
-IMAGE_SIZE = 128
-BATCH_SIZE = 4
-EPOCHS = 10
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+import config
+from models import AttentionUNet
+from utils import BraTSDataset, mc_dropout_inference, plot_results_with_uncertainty
+from train import Trainer
 
-def get_patient_ids(data_dir):
+
+def get_patient_ids(data_dir: str) -> list:
     """
-    模擬取得 BraTS 資料集中的病人 ID 列表。
-    """
-    # 實際操作中，您需要根據 BraTS 資料集的結構來取得所有病人資料夾名稱
-    # 這裡僅為示意，假設資料夾名稱為 'BraTS20_Training_XXX'
-    print("WARNING: Data loading is simulated. Please replace this with actual data loading logic.")
+    獲取資料集中的病人 ID 列表
     
-    # 由於無法下載實際資料，這裡返回一個空列表，讓程式碼結構完整
-    # 實際使用時，請確保 DATA_DIR 內有資料夾
-    if not os.path.exists(data_dir):
-        print(f"Error: Data directory not found at {data_dir}. Please download BraTS data.")
-        return []
+    Args:
+        data_dir: 資料集根目錄
         
-    # 實際的 BraTS 資料夾名稱
+    Returns:
+        病人 ID 列表
+    """
+    if not os.path.exists(data_dir):
+        print(f"❌ Error: Data directory not found at {data_dir}")
+        print(f"Please run: python scripts/download_brats.py")
+        return []
+    
     patient_ids = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
     
-    # 為了讓程式碼能運行，即使沒有資料，我們也返回一個模擬的 ID
     if not patient_ids:
-        print("No patient folders found. Returning a dummy ID for structure demonstration.")
-        return ["dummy_patient_001"] # 實際運行時會因為找不到檔案而失敗，但結構完整
-
-    return patient_ids
-
-def main():
-    print(f"--- 腦部 MRI 腫瘤分割專案啟動 (Device: {DEVICE}) ---")
+        print(f"❌ Error: No patient folders found in {data_dir}")
+        return []
     
-    # 1. 資料準備
-    patient_ids = get_patient_ids(DATA_DIR)
+    return sorted(patient_ids)
+
+
+def train_command(args):
+    """
+    訓練命令
+    """
+    print("\n" + "="*60)
+    print("🚀 Brain MRI Segmentation - Training Mode")
+    print("="*60 + "\n")
+    
+    # 設定隨機種子
+    config.set_seed()
+    
+    # 載入資料
+    patient_ids = get_patient_ids(config.DATA_DIR)
     if not patient_ids:
-        print("無法找到資料集，請先下載 BraTS 資料集並放置於 'data/BraTS2020_TrainingData'。")
         return
-
-    # 由於我們無法實際運行，這裡只展示邏輯
-    # 實際操作中，您需要確保 BraTSDataset 能夠成功載入 NIfTI 檔案
     
-    # 假設我們只使用前 10 個病人進行演示
-    if len(patient_ids) > 10:
-        patient_ids = patient_ids[:10]
-        
+    print(f"✓ Found {len(patient_ids)} patients")
+    
     # 劃分訓練集和驗證集
-    train_size = int(0.8 * len(patient_ids))
-    val_size = len(patient_ids) - train_size
-    train_ids, val_ids = random_split(patient_ids, [train_size, val_size])
+    split_idx = int(len(patient_ids) * config.TRAIN_VAL_SPLIT)
+    train_ids = patient_ids[:split_idx]
+    val_ids = patient_ids[split_idx:]
     
-    # 由於 random_split 返回的是 Subset，我們需要提取原始 ID
-    train_ids = [patient_ids[i] for i in train_ids.indices]
-    val_ids = [patient_ids[i] for i in val_ids.indices]
+    print(f"✓ Train: {len(train_ids)} patients, Val: {len(val_ids)} patients")
+    
+    # 建立 Dataset
+    train_dataset = BraTSDataset(
+        data_dir=config.DATA_DIR,
+        patient_ids=train_ids,
+        image_size=config.IMAGE_SIZE,
+        mode='train',
+        use_smart_slice=True
+    )
+    
+    val_dataset = BraTSDataset(
+        data_dir=config.DATA_DIR,
+        patient_ids=val_ids,
+        image_size=config.IMAGE_SIZE,
+        mode='val',
+        use_smart_slice=True
+    )
+    
+    # 建立 DataLoader
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.BATCH_SIZE,
+        shuffle=True,
+        num_workers=config.NUM_WORKERS,
+        pin_memory=True
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.BATCH_SIZE,
+        shuffle=False,
+        num_workers=config.NUM_WORKERS,
+        pin_memory=True
+    )
+    
+    print(f"✓ DataLoader created")
+    
+    # 建立模型
+    model = AttentionUNet(
+        n_channels=config.N_CHANNELS,
+        n_classes=config.N_CLASSES,
+        dropout_p=config.DROPOUT_P
+    ).to(config.DEVICE)
+    
+    print(f"✓ Model initialized on {config.DEVICE}")
+    
+    # 建立訓練器
+    trainer = Trainer(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=config.DEVICE,
+        use_amp=torch.cuda.is_available()
+    )
+    
+    # 開始訓練
+    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+    trainer.train(epochs=config.EPOCHS)
+    
+    print("\n✅ Training completed!")
 
-    # 建立 Dataset 和 DataLoader
-    # train_dataset = BraTSDataset(data_dir=DATA_DIR, patient_ids=train_ids)
-    # val_dataset = BraTSDataset(data_dir=DATA_DIR, patient_ids=val_ids)
-    # train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    # val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+
+def infer_command(args):
+    """
+    推論命令
+    """
+    print("\n" + "="*60)
+    print("🔍 Brain MRI Segmentation - Inference Mode")
+    print("="*60 + "\n")
     
-    print(f"訓練集病人數: {len(train_ids)}, 驗證集病人數: {len(val_ids)}")
+    # 檢查模型是否存在
+    if not os.path.exists(config.MODEL_SAVE_PATH):
+        print(f"❌ Error: Model not found at {config.MODEL_SAVE_PATH}")
+        print("Please train the model first: python main.py train")
+        return
     
-    # 2. 模型初始化
-    model = AttentionUNet(n_channels=4, n_classes=1).to(DEVICE)
-    print("Attention U-Net 模型初始化完成 (4 通道輸入)。")
+    # 載入資料
+    patient_ids = get_patient_ids(config.DATA_DIR)
+    if not patient_ids:
+        return
     
-    # 3. 訓練模型 (由於沒有資料，這裡註釋掉實際訓練)
-    # print("開始訓練模型...")
-    # train_model(model, train_loader, val_loader, epochs=EPOCHS, device=DEVICE)
-    # torch.save(model.state_dict(), MODEL_PATH)
-    # print(f"模型已儲存至 {MODEL_PATH}")
+    # 選擇病人
+    if args.patient_id:
+        if args.patient_id not in patient_ids:
+            print(f"❌ Error: Patient {args.patient_id} not found")
+            return
+        target_patient = args.patient_id
+    else:
+        # 預設使用第一個病人
+        target_patient = patient_ids[0]
     
-    # 4. 推論與視覺化 (使用模擬資料進行視覺化展示)
-    print("使用模擬資料進行推論與不確定性估計展示...")
+    print(f"✓ Inference on patient: {target_patient}")
     
-    # 模擬一個 4 通道的 MRI 影像 (FLAIR, T1, T1ce, T2)
-    dummy_image = np.random.rand(1, 4, IMAGE_SIZE, IMAGE_SIZE).astype(np.float32)
-    dummy_mask = (np.random.rand(1, 1, IMAGE_SIZE, IMAGE_SIZE) > 0.8).astype(np.float32)
+    # 建立 Dataset
+    dataset = BraTSDataset(
+        data_dir=config.DATA_DIR,
+        patient_ids=[target_patient],
+        image_size=config.IMAGE_SIZE,
+        mode='val',
+        use_smart_slice=True
+    )
     
-    # 模擬 MC Dropout 推論結果
-    dummy_prediction = (np.random.rand(1, 1, IMAGE_SIZE, IMAGE_SIZE) > 0.7).astype(np.float32)
-    dummy_uncertainty = np.random.rand(1, 1, IMAGE_SIZE, IMAGE_SIZE) * 0.1
+    # 載入模型
+    model = AttentionUNet(
+        n_channels=config.N_CHANNELS,
+        n_classes=config.N_CLASSES,
+        dropout_p=config.DROPOUT_P
+    ).to(config.DEVICE)
     
-    # 轉換為 PyTorch Tensor
-    image_tensor = torch.from_numpy(dummy_image)
-    mask_tensor = torch.from_numpy(dummy_mask)
+    checkpoint = torch.load(config.MODEL_SAVE_PATH, map_location=config.DEVICE)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    print(f"✓ Model loaded (Dice: {checkpoint['dice']:.4f})")
     
-    # 實際推論步驟 (如果模型已訓練)
-    # prediction, uncertainty = mc_dropout_inference(model, image_tensor, n_iterations=10, device=DEVICE)
+    # 獲取影像
+    image, mask = dataset[0]
+    image = image.unsqueeze(0)  # Add batch dimension
+    
+    # MC Dropout 推論
+    print(f"✓ Running MC Dropout inference ({config.MC_ITERATIONS} iterations)...")
+    prediction, uncertainty = mc_dropout_inference(
+        model=model,
+        image_tensor=image,
+        n_iterations=config.MC_ITERATIONS,
+        device=config.DEVICE
+    )
     
     # 視覺化
-    # plot_results_with_uncertainty(
-    #     image_tensor.squeeze(0).cpu().numpy(), 
-    #     mask_tensor.squeeze(0).cpu().numpy(), 
-    #     dummy_prediction.squeeze(0),
-    #     dummy_uncertainty.squeeze(0),
-    #     title="優化後推論結果 (Attention U-Net + MC Dropout)"
-    # )
-    print("視覺化程式碼已準備，但因無法在沙盒環境中顯示 Matplotlib 視窗，請在本地運行。")
-    print("請參考 utils/visualize.py 中的 plot_results 函數。")
+    output_dir = os.path.join(config.OUTPUT_DIR, 'inference')
+    os.makedirs(output_dir, exist_ok=True)
+    
+    seg_path = os.path.join(output_dir, f'{target_patient}_segmentation.png')
+    plot_results_with_uncertainty(
+        image=image.squeeze(0).cpu().numpy(),
+        mask=mask.squeeze(0).cpu().numpy(),
+        prediction=prediction.squeeze(0),
+        uncertainty=uncertainty.squeeze(0),
+        save_path=seg_path,
+        title=f"Segmentation Result - {target_patient}"
+    )
+    
+    print(f"\n✅ Inference completed!")
+    print(f"   Segmentation: {seg_path}")
+
+
+def demo_command(args):
+    """
+    Demo 命令：使用少量資料跑 1 epoch 測試流程
+    """
+    print("\n" + "="*60)
+    print("🎯 Brain MRI Segmentation - Demo Mode")
+    print("="*60 + "\n")
+    
+    # 設定隨機種子
+    config.set_seed()
+    
+    # 載入資料
+    patient_ids = get_patient_ids(config.DATA_DIR)
+    if not patient_ids:
+        return
+    
+    # 只使用前 4 個病人
+    demo_ids = patient_ids[:min(4, len(patient_ids))]
+    train_ids = demo_ids[:3] if len(demo_ids) >= 3 else demo_ids
+    val_ids = demo_ids[-1:] if len(demo_ids) >= 2 else demo_ids
+    
+    print(f"✓ Demo with {len(train_ids)} train + {len(val_ids)} val patients")
+    
+    # 建立 Dataset
+    train_dataset = BraTSDataset(
+        data_dir=config.DATA_DIR,
+        patient_ids=train_ids,
+        image_size=config.IMAGE_SIZE,
+        mode='train',
+        use_smart_slice=True
+    )
+    
+    val_dataset = BraTSDataset(
+        data_dir=config.DATA_DIR,
+        patient_ids=val_ids,
+        image_size=config.IMAGE_SIZE,
+        mode='val',
+        use_smart_slice=True
+    )
+    
+    # 建立 DataLoader
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=2,
+        shuffle=True,
+        num_workers=0
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=2,
+        shuffle=False,
+        num_workers=0
+    )
+    
+    # 建立模型
+    model = AttentionUNet(
+        n_channels=config.N_CHANNELS,
+        n_classes=config.N_CLASSES,
+        dropout_p=config.DROPOUT_P
+    ).to(config.DEVICE)
+    
+    print(f"✓ Model initialized on {config.DEVICE}")
+    
+    # 建立訓練器
+    trainer = Trainer(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        device=config.DEVICE,
+        use_amp=False  # Disable AMP for demo
+    )
+    
+    # 訓練 1 epoch
+    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+    trainer.train(epochs=1)
+    
+    print("\n✅ Demo completed!")
+
+
+def main():
+    """
+    主函數
+    """
+    parser = argparse.ArgumentParser(
+        description='Brain MRI Segmentation with Attention U-Net',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python main.py train                    # Train the model
+  python main.py infer                    # Infer on first patient
+  python main.py infer --patient_id P001  # Infer on specific patient
+  python main.py demo                     # Quick demo with 1 epoch
+        """
+    )
+    
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # Train command
+    train_parser = subparsers.add_parser('train', help='Train the model')
+    
+    # Infer command
+    infer_parser = subparsers.add_parser('infer', help='Run inference')
+    infer_parser.add_argument('--patient_id', type=str, help='Patient ID to infer')
+    
+    # Demo command
+    demo_parser = subparsers.add_parser('demo', help='Run quick demo')
+    
+    args = parser.parse_args()
+    
+    if args.command == 'train':
+        train_command(args)
+    elif args.command == 'infer':
+        infer_command(args)
+    elif args.command == 'demo':
+        demo_command(args)
+    else:
+        parser.print_help()
+
 
 if __name__ == "__main__":
     main()

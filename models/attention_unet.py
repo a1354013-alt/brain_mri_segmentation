@@ -1,30 +1,42 @@
+"""
+Attention U-Net implementation for medical image segmentation
+"""
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Tuple
+
 
 class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, dropout_p=0.2):
+    """
+    雙層卷積塊，包含 BatchNorm 和 Dropout
+    """
+    def __init__(self, in_channels: int, out_channels: int, dropout_p: float = 0.2):
         super().__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
-            nn.Dropout2d(p=dropout_p), # 加入 Dropout 以支援 MC Dropout
+            nn.Dropout2d(p=dropout_p),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
         )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.conv(x)
+
 
 class AttentionGate(nn.Module):
     """
     Attention Gate 實作
-    g: 來自深層的 gating signal
-    x: 來自淺層的 skip connection 特徵
+    
+    Args:
+        F_g: gating signal 的通道數
+        F_l: skip connection 的通道數
+        F_int: 中間層的通道數
     """
-    def __init__(self, F_g, F_l, F_int):
+    def __init__(self, F_g: int, F_l: int, F_int: int):
         super().__init__()
         self.W_g = nn.Sequential(
             nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
@@ -41,15 +53,29 @@ class AttentionGate(nn.Module):
         )
         self.relu = nn.ReLU(inplace=True)
 
-    def forward(self, g, x):
+    def forward(self, g: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            g: gating signal from deeper layer
+            x: skip connection from encoder
+        """
         g1 = self.W_g(g)
         x1 = self.W_x(x)
         psi = self.relu(g1 + x1)
         psi = self.psi(psi)
         return x * psi
 
+
 class AttentionUNet(nn.Module):
-    def __init__(self, n_channels=4, n_classes=1, dropout_p=0.2):
+    """
+    Attention U-Net 模型
+    
+    Args:
+        n_channels: 輸入影像通道數
+        n_classes: 輸出類別數
+        dropout_p: Dropout 機率
+    """
+    def __init__(self, n_channels: int = 4, n_classes: int = 1, dropout_p: float = 0.2):
         super().__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
@@ -70,12 +96,7 @@ class AttentionUNet(nn.Module):
         # Center
         self.center = ConvBlock(512, 1024, dropout_p)
         
-        # Decoder + Attention
-        self.up4 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-        self.att4 = AttentionGate(F_g=1024, F_l=512, F_int=256)
-        self.up_conv4 = ConvBlock(1024 + 512, 512, dropout_p) # 修正通道數：1024(up) + 512(att) -> 這裡簡化處理
-        
-        # 為了精確匹配通道，重新定義 Decoder 結構
+        # Decoder + Attention (移除重複定義)
         self.up4 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)
         self.att4 = AttentionGate(F_g=512, F_l=512, F_int=256)
         self.up_conv4 = ConvBlock(1024, 512, dropout_p)
@@ -94,7 +115,16 @@ class AttentionUNet(nn.Module):
 
         self.outc = nn.Conv2d(64, n_classes, kernel_size=1)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass
+        
+        Args:
+            x: Input tensor of shape (B, C, H, W)
+            
+        Returns:
+            Output tensor of shape (B, n_classes, H, W)
+        """
         # Encoder
         e1 = self.conv1(x)
         e2 = self.conv2(self.maxpool1(e1))
@@ -127,3 +157,12 @@ class AttentionUNet(nn.Module):
 
         out = self.outc(d1)
         return out
+    
+    def enable_dropout(self) -> None:
+        """
+        啟用 Dropout 層用於 MC Dropout 推論
+        保持 BatchNorm 在 eval 模式
+        """
+        for module in self.modules():
+            if isinstance(module, nn.Dropout2d):
+                module.train()
