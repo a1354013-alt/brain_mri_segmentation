@@ -1,5 +1,5 @@
 """
-Configuration file for Brain MRI Segmentation Project (v2.5 Final)
+Configuration file for Brain MRI Segmentation Project (v2.6 Final Gold Master)
 """
 import torch
 import random
@@ -11,7 +11,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "data" / "Brats"
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 CHECKPOINT_PATH = OUTPUT_DIR / "best_checkpoint.pth"
+LAST_CHECKPOINT_PATH = OUTPUT_DIR / "last_checkpoint.pth"
 MODEL_STATE_PATH = OUTPUT_DIR / "best_model_state.pth"
+LAST_MODEL_STATE_PATH = OUTPUT_DIR / "last_model_state.pth"
 LOG_FILE = OUTPUT_DIR / "training_log.csv"
 TENSORBOARD_DIR = OUTPUT_DIR / "tensorboard"
 SKIPPED_LOG = OUTPUT_DIR / "skipped_patients.txt"

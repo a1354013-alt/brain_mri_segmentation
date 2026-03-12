@@ -1,5 +1,5 @@
 """
-BraTS Dataset implementation with slice-by-slice scanning and cache control (v2.5)
+BraTS Dataset implementation with shared cache and lightweight validation (v2.6)
 """
 import numpy as np
 import torch
@@ -7,18 +7,18 @@ from torch.utils.data import Dataset
 import nibabel as nib
 from skimage.transform import resize
 from pathlib import Path
-from typing import List, Optional, Tuple, Callable
+from typing import List, Optional, Tuple, Callable, Dict
 import config
 
 
 class BraTSDataset(Dataset):
     """
-    針對 BraTS 資料集的 PyTorch Dataset 類別 (v2.5)
+    針對 BraTS 資料集的 PyTorch Dataset 類別 (v2.6)
     
     優化點：
-    1. 逐切片掃描：不再一次讀取整個 3D Volume，而是逐切片計算腫瘤像素，極致節省記憶體。
-    2. 快取開關：支援 config.USE_PROXY_CACHE。
-    3. 掃描日誌優化：僅列印前 10 筆錯誤，完整清單寫入 outputs/skipped_patients.txt。
+    1. 快取共享：支援傳入外部 prepared_cache，避免重複掃描。
+    2. 輕量化驗證：提供 quick_validate_patient 靜態方法。
+    3. 逐切片掃描：極致節省記憶體。
     """
     def __init__(
         self, 
@@ -26,7 +26,8 @@ class BraTSDataset(Dataset):
         patient_ids: List[str], 
         image_size: int = 128,
         transform: Optional[Callable] = None, 
-        mode: str = 'train'
+        mode: str = 'train',
+        prepared_cache: Optional[Dict] = None
     ):
         self.data_dir = data_dir
         self.image_size = image_size
@@ -35,9 +36,27 @@ class BraTSDataset(Dataset):
         
         self.valid_patient_ids = []
         self.patient_cache = {}
-        self.proxy_cache = {} # 快取 dataobj proxy
+        self.proxy_cache = {}
         
-        self._prepare_dataset(patient_ids)
+        if prepared_cache:
+            self.valid_patient_ids = prepared_cache['valid_patient_ids']
+            self.patient_cache = prepared_cache['patient_cache']
+            self.proxy_cache = prepared_cache.get('proxy_cache', {})
+            print(f"🚀 Dataset initialized with shared cache ({len(self.valid_patient_ids)} patients).")
+        else:
+            self._prepare_dataset(patient_ids)
+
+    @staticmethod
+    def quick_validate_patient(data_dir: Path, pid: str) -> bool:
+        """
+        輕量化驗證：僅檢查檔案存在，不讀取內容 (v2.6)
+        """
+        p_path = data_dir / pid
+        modalities = ['flair', 't1', 't1ce', 't2', 'seg']
+        for mod in modalities:
+            if not (p_path / f"{pid}_{mod}.nii.gz").exists():
+                return False
+        return True
 
     def _prepare_dataset(self, patient_ids: List[str]) -> None:
         skipped_patients = []
@@ -65,10 +84,9 @@ class BraTSDataset(Dataset):
                 mask_proxy = nib.load(str(mask_file))
                 n_slices = mask_proxy.shape[2]
                 
-                # v2.5 逐切片掃描：極致節省記憶體
+                # 逐切片掃描
                 tumor_counts = []
                 for s in range(n_slices):
-                    # 僅讀取單一切片
                     slice_data = np.asarray(mask_proxy.dataobj[:, :, s])
                     tumor_counts.append(np.sum(slice_data > 0))
                 
@@ -87,7 +105,6 @@ class BraTSDataset(Dataset):
                 }
                 self.valid_patient_ids.append(pid)
                 
-                # v2.5 快取開關控制
                 if config.USE_PROXY_CACHE:
                     self.proxy_cache[pid] = {'seg': mask_proxy.dataobj}
                     for mod in modalities:
@@ -103,11 +120,18 @@ class BraTSDataset(Dataset):
                     f.write(f"{pid}: Missing {', '.join(files)}\n")
             
             print(f"⚠️  Skipped {len(skipped_patients)} patients. Full list in {config.SKIPPED_LOG}")
-            print("   First 10 skipped patients:")
-            for pid, files in skipped_patients[:10]:
-                print(f"   - {pid}: Missing {', '.join(files)}")
         
         print(f"✅ Dataset ready: {len(self.valid_patient_ids)} valid patients.")
+
+    def get_cache(self) -> Dict:
+        """
+        獲取當前 Dataset 的快取，以便共享 (v2.6)
+        """
+        return {
+            'valid_patient_ids': self.valid_patient_ids,
+            'patient_cache': self.patient_cache,
+            'proxy_cache': self.proxy_cache
+        }
 
     def __len__(self) -> int:
         return len(self.valid_patient_ids)

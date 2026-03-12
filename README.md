@@ -1,28 +1,27 @@
-# Brain MRI Tumor Segmentation (v2.5 Final Master)
+# Brain MRI Tumor Segmentation (v2.6 Final Gold Master)
 
-基於 **Attention U-Net** 的腦部 MRI 腫瘤分割專案，支援不確定性估計與極致優化的 I/O。
+基於 **Attention U-Net** 的腦部 MRI 腫瘤分割專案，支援不確定性估計與極致優化的 I/O 與快取機制。
 
 ---
 
-## 📋 專案更新亮點 (v2.5 Final)
+## 📋 專案更新亮點 (v2.6 Final)
 
-- **逐切片掃描 (Slice-by-Slice Scanning)**：`BraTSDataset` 初始化時不再一次性讀取整個 3D Volume，而是逐切片計算腫瘤像素。這將掃描階段的記憶體佔用降至最低，即使在處理數百名病人時也能保持極速且穩定。
-- **AMP CPU 安全性修正**：`Trainer` 現在會自動偵測裝置類型。僅在 `cuda` 環境下啟用 **AMP (混合精度訓練)**，避免在 CPU 環境下產生無效的警告或效能損耗。
-- **Alpha Blending 視覺化**：推論結果的 Overlay 疊加圖現在支援 **Alpha Blending (透明度混合)**。這讓使用者在看到紅色預測區域的同時，仍能清晰觀察到原圖的 MRI 紋理細節。
-- **下載腳本加固**：`download_brats.py` 解決了搬移撞名與重複計數的邊界問題。若未找到任何有效資料，系統會拋出 `RuntimeError`，對自動化流程更友善。
-- **依賴清理**：移除了 `requirements.txt` 中未使用的 `torchvision` 依賴，保持環境純淨。
-- **曲線繪製品質提升**：訓練曲線圖現在包含完整的座標軸標籤、緊湊佈局 (Tight Layout) 與高解析度 (150 DPI) 輸出。
+- **快取共享機制 (Shared Cache)**：`BraTSDataset` 現在支援傳入外部 `prepared_cache`。在訓練啟動時，訓練集與驗證集會共享掃描結果，避免了對同一批病人資料進行重複掃描，大幅縮短啟動時間。
+- **輕量化驗證 (Lightweight Validation)**：實作了 `quick_validate_patient` 靜態方法。在推論與 Demo 模式下，系統僅檢查檔案存在性，不再執行耗時的逐切片掃描，實現秒級啟動。
+- **Last Checkpoint 雙重保險**：`Trainer` 現在除了儲存 `best_checkpoint.pth` 外，每一輪都會更新 `last_checkpoint.pth`。這確保了即使驗證指標未創新高，使用者仍能獲得最新的訓練狀態。
+- **Kaggle 下載魯棒性強化**：`download_brats.py` 現在會自動偵測最新下載的 zip 檔案，不再依賴寫死的檔名。同時，搬移衝突時會自動追加後綴（如 `_1`, `_2`），避免資料遺失。
+- **進度條一致性修正**：修正了 `tqdm` 進度條在 Demo 模式下顯示錯誤總輪數的問題，現在會根據實際傳入的 `epochs` 動態調整。
+- **Demo 模式一致性**：顯式指定 `num_workers=0` 並同步隨機種子，確保 Demo 流程的行為與正式訓練完全一致。
 
 ---
 
 ## 🏗️ 技術細節
 
-### 1. 記憶體優化
-透過 `np.asarray(proxy.dataobj[:, :, s])` 僅讀取單一 2D 切片，避免了 NIfTI 檔案在轉換為 ndarray 時產生的巨大記憶體開銷。
+### 1. 快取共享
+透過 `dataset.get_cache()` 提取掃描後的 Metadata（含有效 ID、腫瘤索引、Proxy 快取），並透過 `prepared_cache` 參數傳遞給下一個 Dataset 實例。
 
-### 2. 視覺化展示
-- **Uncertainty Map**：支援 Variance 與 Entropy 兩種指標。
-- **Overlay**：使用 `(1 - alpha) * image + alpha * mask` 進行混合，預設 `alpha=0.35`。
+### 2. 下載衝突處理
+使用 `while target_dir.exists()` 迴圈偵測目標路徑，確保在多來源資料合併時不會發生覆蓋。
 
 ---
 
@@ -30,19 +29,19 @@
 
 ### 1. 資料準備
 ```bash
-# 自動下載、解壓、對齊並清理不完整資料 (具備錯誤拋出機制)
+# 自動下載、解壓、對齊並處理衝突 (具備最新 zip 偵測)
 python scripts/download_brats.py --auto
 ```
 
 ### 2. 訓練與推論
 ```bash
-# 訓練 (自動偵測 AMP 支援)
+# 訓練 (支援快取共享，啟動極速)
 python main.py train
 
-# 推論 (支援 Alpha Blending 疊加圖)
+# 推論 (輕量化驗證，秒級啟動)
 python main.py infer --uncertainty entropy
 
-# Demo (快速驗證完整流程)
+# Demo (行為一致性強化)
 python main.py demo
 ```
 
@@ -51,14 +50,14 @@ python main.py demo
 ## 📁 專案結構
 ```
 brain_mri_segmentation/
-├── config.py              # 核心配置 (含 OVERLAY_ALPHA)
-├── main.py                # CLI 入口 (含 AMP 自動偵測)
-├── train.py               # 訓練邏輯 (AMP CPU 安全修正)
+├── config.py              # 核心配置 (含 LAST_CHECKPOINT_PATH)
+├── main.py                # CLI 入口 (含快取共享與輕量驗證)
+├── train.py               # 訓練邏輯 (Last Checkpoint 儲存)
 ├── models/
-│   └── attention_unet.py  # 具備斷言保護的模型
+│   └── attention_unet.py  # 具備斷言保護的模型 (v2.6)
 ├── utils/
-│   ├── dataset.py         # 逐切片掃描優化
+│   ├── dataset.py         # 快取共享與輕量化驗證實作
 │   └── visualize.py       # Alpha Blending 視覺化
 └── scripts/
-    └── download_brats.py  # 加固的下載與清理腳本
+    └── download_brats.py  # 強化版下載與衝突處理腳本
 ```

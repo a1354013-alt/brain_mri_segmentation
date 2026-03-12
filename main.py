@@ -1,5 +1,5 @@
 """
-Main CLI for Brain MRI Segmentation Project (v2.5 Final)
+Main CLI for Brain MRI Segmentation Project (v2.6 Final Gold Master)
 """
 import argparse
 import torch
@@ -16,7 +16,7 @@ from train import Trainer
 
 def worker_init_fn(worker_id):
     """
-    修正多 worker RNG 問題 (v2.5)：包含 torch seed
+    修正多 worker RNG 問題 (v2.6)：包含 torch seed
     """
     seed = config.RANDOM_SEED + worker_id
     np.random.seed(seed)
@@ -47,8 +47,12 @@ def train_command(args):
     train_ids = patient_ids[:split_idx]
     val_ids = patient_ids[split_idx:]
     
+    # v2.6 實作快取共享，避免重複掃描
     train_dataset = BraTSDataset(config.DATA_DIR, train_ids, config.IMAGE_SIZE, mode='train')
-    val_dataset = BraTSDataset(config.DATA_DIR, val_ids, config.IMAGE_SIZE, mode='val')
+    shared_cache = train_dataset.get_cache()
+    
+    # 驗證集使用共享快取
+    val_dataset = BraTSDataset(config.DATA_DIR, val_ids, config.IMAGE_SIZE, mode='val', prepared_cache=shared_cache)
     
     train_loader = DataLoader(
         train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, 
@@ -61,16 +65,15 @@ def train_command(args):
     
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
     
-    # v2.5 AMP 自動偵測
     use_amp = (config.DEVICE.type == "cuda")
     
     trainer = Trainer(
         model=model, train_loader=train_loader, val_loader=val_loader, device=config.DEVICE,
         output_dir=config.OUTPUT_DIR, checkpoint_path=config.CHECKPOINT_PATH, 
         model_state_path=config.MODEL_STATE_PATH, log_file=config.LOG_FILE,
-        tensorboard_dir=config.TENSORBOARD_DIR, use_amp=use_amp
+        tensorboard_dir=config.TENSORBOARD_DIR, use_amp=use_amp, total_epochs=config.EPOCHS
     )
-    trainer.train(epochs=config.EPOCHS)
+    trainer.train()
 
 
 def infer_command(args):
@@ -97,17 +100,19 @@ def infer_command(args):
     target_patient = args.patient_id
     dataset = None
     
+    # v2.6 輕量化驗證邏輯
     if target_patient:
-        dataset = BraTSDataset(config.DATA_DIR, [target_patient], config.IMAGE_SIZE, mode='val')
-        if len(dataset) == 0:
+        if BraTSDataset.quick_validate_patient(config.DATA_DIR, target_patient):
+            dataset = BraTSDataset(config.DATA_DIR, [target_patient], config.IMAGE_SIZE, mode='val')
+        else:
             print(f"⚠️  Patient {target_patient} is invalid. Searching for the first valid patient...")
-            dataset = None
+            target_patient = None
             
-    if dataset is None:
+    if target_patient is None:
         for pid in patient_ids:
-            dataset = BraTSDataset(config.DATA_DIR, [pid], config.IMAGE_SIZE, mode='val')
-            if len(dataset) > 0:
+            if BraTSDataset.quick_validate_patient(config.DATA_DIR, pid):
                 target_patient = pid
+                dataset = BraTSDataset(config.DATA_DIR, [pid], config.IMAGE_SIZE, mode='val')
                 print(f"💡 Automatically selected valid patient: {target_patient}")
                 break
     
@@ -137,8 +142,8 @@ def demo_command(args):
         
     demo_ids = []
     for pid in patient_ids:
-        temp_ds = BraTSDataset(config.DATA_DIR, [pid], config.IMAGE_SIZE, mode='val')
-        if len(temp_ds) > 0:
+        # v2.6 輕量化驗證
+        if BraTSDataset.quick_validate_patient(config.DATA_DIR, pid):
             demo_ids.append(pid)
         if len(demo_ids) >= 2:
             break
@@ -148,7 +153,8 @@ def demo_command(args):
         return
     
     train_dataset = BraTSDataset(config.DATA_DIR, demo_ids, config.IMAGE_SIZE, mode='train')
-    train_loader = DataLoader(train_dataset, batch_size=1, worker_init_fn=worker_init_fn)
+    # v2.6 Demo 模式指定 num_workers=0 以確保行為一致
+    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=0, worker_init_fn=worker_init_fn)
     
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
     
@@ -156,9 +162,9 @@ def demo_command(args):
         model=model, train_loader=train_loader, val_loader=train_loader, device=config.DEVICE,
         output_dir=config.DEMO_OUTPUT_DIR, checkpoint_path=config.DEMO_CHECKPOINT_PATH, 
         model_state_path=config.DEMO_MODEL_STATE_PATH, log_file=config.DEMO_LOG_FILE,
-        tensorboard_dir=config.DEMO_TENSORBOARD_DIR, use_amp=False
+        tensorboard_dir=config.DEMO_TENSORBOARD_DIR, use_amp=False, total_epochs=1
     )
-    trainer.train(epochs=1)
+    trainer.train()
     
     # Demo 推論
     image, mask = train_dataset[0]

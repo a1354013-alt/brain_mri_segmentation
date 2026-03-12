@@ -1,5 +1,5 @@
 """
-Training module with robust path handling and AMP CPU safety (v2.5)
+Training module with robust path handling and last checkpoint saving (v2.6)
 """
 import csv
 import torch
@@ -49,7 +49,8 @@ class Trainer:
         model_state_path: Path,
         log_file: Path,
         tensorboard_dir: Path,
-        use_amp: bool = True
+        use_amp: bool = True,
+        total_epochs: int = config.EPOCHS
     ):
         self.model = model
         self.train_loader = train_loader
@@ -59,8 +60,8 @@ class Trainer:
         self.checkpoint_path = checkpoint_path
         self.model_state_path = model_state_path
         self.log_file = log_file
+        self.total_epochs = total_epochs
         
-        # v2.5 AMP CPU 安全性修正
         self.use_amp = use_amp and (device.type == "cuda")
         
         self.criterion = DiceLoss()
@@ -75,7 +76,8 @@ class Trainer:
     def train_epoch(self, epoch: int) -> float:
         self.model.train()
         total_loss = 0.0
-        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{config.EPOCHS} [Train]")
+        # v2.6 修正進度條顯示
+        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.total_epochs} [Train]")
         for images, masks in pbar:
             images, masks = images.to(self.device), masks.to(self.device)
             self.optimizer.zero_grad()
@@ -113,7 +115,7 @@ class Trainer:
                 val_dice += dice_coeff(preds, masks).item()
         return val_loss / len(self.val_loader), val_dice / len(self.val_loader)
     
-    def save_checkpoints(self, epoch: int, dice: float) -> None:
+    def save_checkpoints(self, epoch: int, dice: float, is_best: bool = True) -> None:
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
@@ -122,14 +124,22 @@ class Trainer:
             'dice': dice,
             'history': self.history
         }
-        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(checkpoint, self.checkpoint_path)
-        torch.save(self.model.state_dict(), self.model_state_path)
-        print(f"✓ Checkpoints saved to {self.output_dir}")
-    
-    def train(self, epochs: int) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        for epoch in range(epochs):
+        
+        if is_best:
+            torch.save(checkpoint, self.checkpoint_path)
+            torch.save(self.model.state_dict(), self.model_state_path)
+            print(f"⭐ Best model saved (Dice: {dice:.4f})")
+        else:
+            # v2.6 儲存最後一份保險
+            last_cp = self.output_dir / "last_checkpoint.pth"
+            last_ms = self.output_dir / "last_model_state.pth"
+            torch.save(checkpoint, last_cp)
+            torch.save(self.model.state_dict(), last_ms)
+    
+    def train(self) -> None:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        for epoch in range(self.total_epochs):
             train_loss = self.train_epoch(epoch)
             val_loss, val_dice = self.validate()
             self.scheduler.step(val_dice)
@@ -148,7 +158,10 @@ class Trainer:
             
             if val_dice > self.best_dice:
                 self.best_dice = val_dice
-                self.save_checkpoints(epoch, val_dice)
+                self.save_checkpoints(epoch, val_dice, is_best=True)
+            
+            # 每一輪都更新最後一份保險
+            self.save_checkpoints(epoch, val_dice, is_best=False)
         
         self.save_log()
         self.plot_curves()
@@ -163,7 +176,6 @@ class Trainer:
                 writer.writerow([i+1, self.history['train_loss'][i], self.history['val_loss'][i], self.history['val_dice'][i], self.history['lr'][i]])
 
     def plot_curves(self) -> None:
-        # v2.5 優化曲線繪製品質
         fig, axes = plt.subplots(1, 2, figsize=(15, 5))
         axes[0].plot(self.history['train_loss'], label='Train')
         axes[0].plot(self.history['val_loss'], label='Val')

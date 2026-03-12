@@ -1,5 +1,5 @@
 """
-BraTS Dataset Download Helper Script with Robust Error Handling (v2.5 Final)
+BraTS Dataset Download Helper Script with Robust Error Handling (v2.6 Final)
 """
 import argparse
 import zipfile
@@ -11,7 +11,6 @@ def is_patient_folder_complete(folder_path: Path) -> bool:
     """
     統一完整性檢查邏輯：必須包含 4 模態 + Seg
     """
-    # 尋找資料夾內的 flair 檔案來推導 PID
     flair_files = list(folder_path.glob("*_flair.nii.gz"))
     if not flair_files:
         return False
@@ -30,8 +29,8 @@ def is_patient_folder_complete(folder_path: Path) -> bool:
 
 def validate_and_align_structure(base_dir: Path) -> bool:
     """
-    驗證並自動對齊資料結構 (v2.5)：
-    1. 解決搬移撞名問題：若目標已存在則跳過。
+    驗證並自動對齊資料結構 (v2.6)：
+    1. 解決搬移撞名問題：若目標已存在則追加後綴。
     2. 解決重複計數問題：使用 seen_dirs 記錄。
     3. 錯誤拋出：若未找到任何資料則拋出 RuntimeError。
     """
@@ -52,20 +51,21 @@ def validate_and_align_structure(base_dir: Path) -> bool:
             
         if is_patient_folder_complete(p_dir):
             seen_dirs.add(p_dir)
-            # 如果資料夾不在 base_dir 的直接下一層，則移動它
             if p_dir.parent != base_dir:
                 target_dir = base_dir / p_dir.name
-                if not target_dir.exists():
-                    print(f"📦 Moving valid patient {p_dir.name} to {base_dir}")
-                    try:
-                        shutil.move(str(p_dir), str(target_dir))
-                    except Exception as e:
-                        print(f"⚠️  Failed to move {p_dir.name}: {e}")
-                else:
-                    print(f"⚠️  Target directory {target_dir.name} already exists. Skipping move.")
+                # v2.6 處理搬移衝突
+                counter = 1
+                while target_dir.exists():
+                    target_dir = base_dir / f"{p_dir.name}_{counter}"
+                    counter += 1
+                
+                print(f"📦 Moving valid patient {p_dir.name} to {target_dir.name}")
+                try:
+                    shutil.move(str(p_dir), str(target_dir))
+                except Exception as e:
+                    print(f"⚠️  Failed to move {p_dir.name}: {e}")
             valid_patient_count += 1
     
-    # 清理邏輯
     print("🧹 Cleaning up invalid or empty folders...")
     for item in base_dir.iterdir():
         if item.is_dir():
@@ -107,11 +107,17 @@ def auto_download_kaggle(data_dir: Path):
         return False
     
     data_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = data_dir.parent / "brats20-dataset-training-validation.zip"
     
     try:
         kaggle.api.dataset_download_files("awsaf49/brats20-dataset-training-validation", path=str(data_dir.parent), unzip=False)
         
+        # v2.6 偵測最新下載的 zip 檔案
+        zip_files = sorted(list(data_dir.parent.glob("*.zip")), key=lambda x: x.stat().st_mtime, reverse=True)
+        if not zip_files:
+            print("❌ Error: No zip file found after download.")
+            return False
+        
+        zip_path = zip_files[0]
         print(f"⏳ Extracting {zip_path.name}...")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(data_dir)
