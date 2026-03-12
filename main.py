@@ -1,5 +1,5 @@
 """
-Main CLI for Brain MRI Segmentation Project (v2.4 Final)
+Main CLI for Brain MRI Segmentation Project (v2.5 Final)
 """
 import argparse
 import torch
@@ -16,7 +16,7 @@ from train import Trainer
 
 def worker_init_fn(worker_id):
     """
-    修正多 worker RNG 問題 (v2.4)：包含 torch seed
+    修正多 worker RNG 問題 (v2.5)：包含 torch seed
     """
     seed = config.RANDOM_SEED + worker_id
     np.random.seed(seed)
@@ -61,11 +61,14 @@ def train_command(args):
     
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
     
+    # v2.5 AMP 自動偵測
+    use_amp = (config.DEVICE.type == "cuda")
+    
     trainer = Trainer(
         model=model, train_loader=train_loader, val_loader=val_loader, device=config.DEVICE,
         output_dir=config.OUTPUT_DIR, checkpoint_path=config.CHECKPOINT_PATH, 
         model_state_path=config.MODEL_STATE_PATH, log_file=config.LOG_FILE,
-        tensorboard_dir=config.TENSORBOARD_DIR
+        tensorboard_dir=config.TENSORBOARD_DIR, use_amp=use_amp
     )
     trainer.train(epochs=config.EPOCHS)
 
@@ -91,7 +94,6 @@ def infer_command(args):
         print("❌ No data found in DATA_DIR.")
         return
         
-    # v2.4 體驗升級：自動挑選有效病人
     target_patient = args.patient_id
     dataset = None
     
@@ -133,7 +135,6 @@ def demo_command(args):
         print("❌ No data found in DATA_DIR.")
         return
         
-    # v2.4 Demo 模式也加入有效病人挑選
     demo_ids = []
     for pid in patient_ids:
         temp_ds = BraTSDataset(config.DATA_DIR, [pid], config.IMAGE_SIZE, mode='val')

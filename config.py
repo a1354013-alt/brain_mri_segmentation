@@ -1,5 +1,5 @@
 """
-Configuration file for Brain MRI Segmentation Project (v2.4 Final)
+Configuration file for Brain MRI Segmentation Project (v2.5 Final)
 """
 import torch
 import random
@@ -28,6 +28,7 @@ N_CHANNELS = 4  # FLAIR, T1, T1ce, T2
 N_CLASSES = 1   # Binary segmentation (Whole Tumor)
 DROPOUT_P = 0.2
 THRESHOLD = 0.5
+OVERLAY_ALPHA = 0.35 # 視覺化疊加透明度
 
 # ==================== 訓練參數 ====================
 IMAGE_SIZE = 128
@@ -40,7 +41,7 @@ GRAD_CLIP_VALUE = 1.0
 # ==================== 資料增強參數 ====================
 TRAIN_VAL_SPLIT = 0.8
 NUM_WORKERS = 4
-USE_PROXY_CACHE = True  # 是否快取 nibabel dataobj proxy 以提升速度
+USE_PROXY_CACHE = True  # 是否快取 nibabel dataobj proxy
 
 # ==================== MC Dropout 參數 ====================
 MC_ITERATIONS = 20

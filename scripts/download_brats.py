@@ -1,5 +1,5 @@
 """
-BraTS Dataset Download Helper Script with Unified Validation (v2.4 Final)
+BraTS Dataset Download Helper Script with Robust Error Handling (v2.5 Final)
 """
 import argparse
 import zipfile
@@ -28,27 +28,30 @@ def is_patient_folder_complete(folder_path: Path) -> bool:
     return True
 
 
-def validate_and_align_structure(base_dir: Path) -> None:
+def validate_and_align_structure(base_dir: Path) -> bool:
     """
-    驗證並自動對齊資料結構 (v2.4)：
-    1. 統一使用 is_patient_folder_complete 進行判定
-    2. 自動從檔名推導 PID，不依賴資料夾名稱
-    3. 強化清理邏輯，確保不留殘餘不完整資料
+    驗證並自動對齊資料結構 (v2.5)：
+    1. 解決搬移撞名問題：若目標已存在則跳過。
+    2. 解決重複計數問題：使用 seen_dirs 記錄。
+    3. 錯誤拋出：若未找到任何資料則拋出 RuntimeError。
     """
     print("🔍 Validating and aligning data structure...")
     
-    # 1. 尋找所有潛在的病人資料夾 (包含子目錄)
     all_flair_files = list(base_dir.rglob("*_flair.nii.gz"))
     
     if not all_flair_files:
-        print(f"❌ Error: No BraTS data found in {base_dir}.")
-        return
+        raise RuntimeError(f"❌ Error: No BraTS data found in {base_dir}. Please check your download.")
 
     valid_patient_count = 0
+    seen_dirs = set()
+    
     for flair_f in all_flair_files:
         p_dir = flair_f.parent
-        
+        if p_dir in seen_dirs:
+            continue
+            
         if is_patient_folder_complete(p_dir):
+            seen_dirs.add(p_dir)
             # 如果資料夾不在 base_dir 的直接下一層，則移動它
             if p_dir.parent != base_dir:
                 target_dir = base_dir / p_dir.name
@@ -58,9 +61,11 @@ def validate_and_align_structure(base_dir: Path) -> None:
                         shutil.move(str(p_dir), str(target_dir))
                     except Exception as e:
                         print(f"⚠️  Failed to move {p_dir.name}: {e}")
+                else:
+                    print(f"⚠️  Target directory {target_dir.name} already exists. Skipping move.")
             valid_patient_count += 1
     
-    # 2. 清理邏輯 (v2.4)：統一完整性檢查
+    # 清理邏輯
     print("🧹 Cleaning up invalid or empty folders...")
     for item in base_dir.iterdir():
         if item.is_dir():
@@ -72,6 +77,7 @@ def validate_and_align_structure(base_dir: Path) -> None:
                     print(f"⚠️  Could not remove {item}: {e}")
 
     print(f"✅ Final DATA_DIR structure validated. Found {valid_patient_count} valid patients.")
+    return valid_patient_count > 0
 
 
 def check_data_exists(data_dir: Path) -> bool:
@@ -130,7 +136,10 @@ def main():
     
     if check_data_exists(data_path):
         print(f"\n✅ Dataset already exists at: {data_path}")
-        validate_and_align_structure(data_path)
+        try:
+            validate_and_align_structure(data_path)
+        except RuntimeError as e:
+            print(str(e))
         return
     
     if args.auto:

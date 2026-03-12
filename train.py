@@ -1,5 +1,5 @@
 """
-Training module with robust path handling and scheduler checkpointing (v2.3)
+Training module with robust path handling and AMP CPU safety (v2.5)
 """
 import csv
 import torch
@@ -59,12 +59,14 @@ class Trainer:
         self.checkpoint_path = checkpoint_path
         self.model_state_path = model_state_path
         self.log_file = log_file
-        self.use_amp = use_amp
+        
+        # v2.5 AMP CPU 安全性修正
+        self.use_amp = use_amp and (device.type == "cuda")
         
         self.criterion = DiceLoss()
         self.optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='max', factor=0.5, patience=5)
-        self.scaler = GradScaler() if use_amp else None
+        self.scaler = GradScaler() if self.use_amp else None
         
         self.writer = SummaryWriter(str(tensorboard_dir))
         self.history = {'train_loss': [], 'val_loss': [], 'val_dice': [], 'lr': []}
@@ -161,11 +163,19 @@ class Trainer:
                 writer.writerow([i+1, self.history['train_loss'][i], self.history['val_loss'][i], self.history['val_dice'][i], self.history['lr'][i]])
 
     def plot_curves(self) -> None:
+        # v2.5 優化曲線繪製品質
         fig, axes = plt.subplots(1, 2, figsize=(15, 5))
         axes[0].plot(self.history['train_loss'], label='Train')
         axes[0].plot(self.history['val_loss'], label='Val')
-        axes[0].set_title('Loss'); axes[0].legend()
-        axes[1].plot(self.history['val_dice'], label='Val Dice')
-        axes[1].set_title('Dice'); axes[1].legend()
-        plt.savefig(self.output_dir / "loss_curve.png")
+        axes[0].set_title('Loss')
+        axes[0].set_xlabel('Epoch')
+        axes[0].legend()
+        
+        axes[1].plot(self.history['val_dice'], label='Val Dice', color='green')
+        axes[1].set_title('Dice Score')
+        axes[1].set_xlabel('Epoch')
+        axes[1].legend()
+        
+        plt.tight_layout()
+        plt.savefig(self.output_dir / "loss_curve.png", dpi=150, bbox_inches='tight')
         plt.close()

@@ -1,5 +1,5 @@
 """
-BraTS Dataset implementation with memory-friendly scanning and cache control (v2.4)
+BraTS Dataset implementation with slice-by-slice scanning and cache control (v2.5)
 """
 import numpy as np
 import torch
@@ -13,12 +13,12 @@ import config
 
 class BraTSDataset(Dataset):
     """
-    針對 BraTS 資料集的 PyTorch Dataset 類別 (v2.4)
+    針對 BraTS 資料集的 PyTorch Dataset 類別 (v2.5)
     
     優化點：
-    1. 記憶體友善掃描：使用 np.asarray(proxy) 避免 get_fdata() 造成記憶體膨脹
-    2. 快取開關：支援 config.USE_PROXY_CACHE，關閉時回退至每次讀檔以提升穩定性
-    3. 掃描日誌優化：僅列印前 10 筆錯誤，完整清單寫入 outputs/skipped_patients.txt
+    1. 逐切片掃描：不再一次讀取整個 3D Volume，而是逐切片計算腫瘤像素，極致節省記憶體。
+    2. 快取開關：支援 config.USE_PROXY_CACHE。
+    3. 掃描日誌優化：僅列印前 10 筆錯誤，完整清單寫入 outputs/skipped_patients.txt。
     """
     def __init__(
         self, 
@@ -63,15 +63,20 @@ class BraTSDataset(Dataset):
             
             try:
                 mask_proxy = nib.load(str(mask_file))
-                # v2.4 記憶體友善掃描：使用 np.asarray(proxy) 避免 get_fdata()
-                mask_volume = np.asarray(mask_proxy.dataobj)
-                mask_binary = (mask_volume > 0).astype(np.uint8)
+                n_slices = mask_proxy.shape[2]
                 
-                tumor_counts = np.sum(mask_binary, axis=(0, 1))
+                # v2.5 逐切片掃描：極致節省記憶體
+                tumor_counts = []
+                for s in range(n_slices):
+                    # 僅讀取單一切片
+                    slice_data = np.asarray(mask_proxy.dataobj[:, :, s])
+                    tumor_counts.append(np.sum(slice_data > 0))
+                
+                tumor_counts = np.array(tumor_counts)
                 tumor_indices = np.where(tumor_counts > 0)[0].tolist()
                 
                 if not tumor_indices:
-                    best_idx = mask_volume.shape[2] // 2
+                    best_idx = n_slices // 2
                     tumor_indices = [best_idx]
                 else:
                     best_idx = int(np.argmax(tumor_counts))
@@ -82,11 +87,9 @@ class BraTSDataset(Dataset):
                 }
                 self.valid_patient_ids.append(pid)
                 
-                # v2.4 快取開關控制
+                # v2.5 快取開關控制
                 if config.USE_PROXY_CACHE:
-                    self.proxy_cache[pid] = {
-                        'seg': mask_proxy.dataobj
-                    }
+                    self.proxy_cache[pid] = {'seg': mask_proxy.dataobj}
                     for mod in modalities:
                         self.proxy_cache[pid][mod] = nib.load(str(p_path / f"{pid}_{mod}.nii.gz")).dataobj
                 

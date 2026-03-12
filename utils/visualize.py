@@ -1,5 +1,5 @@
 """
-Visualization utilities with parameterized threshold and MC Dropout (v2.3)
+Visualization utilities with Alpha Blending and MC Dropout (v2.5)
 """
 import matplotlib.pyplot as plt
 import torch
@@ -72,11 +72,20 @@ def plot_results_with_uncertainty(
     axes[3].set_title("Uncertainty Map"); axes[3].axis('off')
     plt.colorbar(im, ax=axes[3], fraction=0.046, pad=0.04)
     
-    # Overlay (v2.3 簡化邏輯)
-    overlay = np.stack([image[0]]*3, axis=-1)
-    overlay = (overlay - overlay.min()) / (overlay.max() - overlay.min() + 1e-8)
-    overlay[prediction[0] > 0, 0] = 1.0 # Red channel for prediction
-    axes[4].imshow(overlay); axes[4].set_title("Overlay"); axes[4].axis('off')
+    # Overlay (v2.5 Alpha Blending)
+    img_norm = (image[0] - image[0].min()) / (image[0].max() - image[0].min() + 1e-8)
+    overlay = np.stack([img_norm]*3, axis=-1)
+    
+    # 建立紅色遮罩
+    red_mask = np.zeros_like(overlay)
+    red_mask[prediction[0] > 0, 0] = 1.0
+    
+    # Alpha Blending: 僅在預測區域進行混合
+    alpha = config.OVERLAY_ALPHA
+    mask_idx = prediction[0] > 0
+    overlay[mask_idx] = (1 - alpha) * overlay[mask_idx] + alpha * red_mask[mask_idx]
+    
+    axes[4].imshow(overlay); axes[4].set_title("Overlay (Alpha Blending)"); axes[4].axis('off')
     
     plt.suptitle(title, fontsize=16, fontweight='bold')
     plt.tight_layout()
