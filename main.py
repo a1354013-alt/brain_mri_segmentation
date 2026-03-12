@@ -1,5 +1,5 @@
 """
-Main CLI for Brain MRI Segmentation Project (v2.3)
+Main CLI for Brain MRI Segmentation Project (v2.4 Final)
 """
 import argparse
 import torch
@@ -16,7 +16,7 @@ from train import Trainer
 
 def worker_init_fn(worker_id):
     """
-    修正多 worker RNG 問題 (v2.3)：包含 torch seed
+    修正多 worker RNG 問題 (v2.4)：包含 torch seed
     """
     seed = config.RANDOM_SEED + worker_id
     np.random.seed(seed)
@@ -91,11 +91,26 @@ def infer_command(args):
         print("❌ No data found in DATA_DIR.")
         return
         
-    target_patient = args.patient_id if args.patient_id else patient_ids[0]
+    # v2.4 體驗升級：自動挑選有效病人
+    target_patient = args.patient_id
+    dataset = None
     
-    dataset = BraTSDataset(config.DATA_DIR, [target_patient], config.IMAGE_SIZE, mode='val')
-    if len(dataset) == 0:
-        print(f"❌ Patient {target_patient} not found or invalid.")
+    if target_patient:
+        dataset = BraTSDataset(config.DATA_DIR, [target_patient], config.IMAGE_SIZE, mode='val')
+        if len(dataset) == 0:
+            print(f"⚠️  Patient {target_patient} is invalid. Searching for the first valid patient...")
+            dataset = None
+            
+    if dataset is None:
+        for pid in patient_ids:
+            dataset = BraTSDataset(config.DATA_DIR, [pid], config.IMAGE_SIZE, mode='val')
+            if len(dataset) > 0:
+                target_patient = pid
+                print(f"💡 Automatically selected valid patient: {target_patient}")
+                break
+    
+    if dataset is None or len(dataset) == 0:
+        print("❌ Error: No valid patients found in DATA_DIR.")
         return
         
     image, mask = dataset[0]
@@ -118,14 +133,24 @@ def demo_command(args):
         print("❌ No data found in DATA_DIR.")
         return
         
-    demo_ids = patient_ids[:min(2, len(patient_ids))]
+    # v2.4 Demo 模式也加入有效病人挑選
+    demo_ids = []
+    for pid in patient_ids:
+        temp_ds = BraTSDataset(config.DATA_DIR, [pid], config.IMAGE_SIZE, mode='val')
+        if len(temp_ds) > 0:
+            demo_ids.append(pid)
+        if len(demo_ids) >= 2:
+            break
+            
+    if not demo_ids:
+        print("❌ No valid patients found for Demo.")
+        return
     
     train_dataset = BraTSDataset(config.DATA_DIR, demo_ids, config.IMAGE_SIZE, mode='train')
     train_loader = DataLoader(train_dataset, batch_size=1, worker_init_fn=worker_init_fn)
     
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
     
-    # Demo 模式輸出隔離 (v2.3 統一路徑配置)
     trainer = Trainer(
         model=model, train_loader=train_loader, val_loader=train_loader, device=config.DEVICE,
         output_dir=config.DEMO_OUTPUT_DIR, checkpoint_path=config.DEMO_CHECKPOINT_PATH, 
@@ -134,7 +159,7 @@ def demo_command(args):
     )
     trainer.train(epochs=1)
     
-    # Demo 推論 (使用 config.DEMO_MC_ITERATIONS)
+    # Demo 推論
     image, mask = train_dataset[0]
     prediction, uncertainty = mc_dropout_inference(model, image.unsqueeze(0), n_iterations=config.DEMO_MC_ITERATIONS)
     save_path = config.DEMO_OUTPUT_DIR / "demo_inference.png"

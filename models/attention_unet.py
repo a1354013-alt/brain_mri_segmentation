@@ -1,5 +1,5 @@
 """
-Attention U-Net implementation with robust input size protection (v2.3)
+Attention U-Net implementation with robust input size protection and assertions (v2.4)
 """
 import torch
 import torch.nn as nn
@@ -87,9 +87,10 @@ class AttentionUNet(nn.Module):
 
     def _align_and_concat(self, x_skip: torch.Tensor, x_up: torch.Tensor) -> torch.Tensor:
         """
-        尺寸對齊保護 (v2.3)：
+        尺寸對齊保護 (v2.4)：
         1. 若 x_up 較小 (diff > 0) -> 使用 Padding
         2. 若 x_up 較大 (diff < 0) -> 使用 Center Crop
+        3. 最後加入 Assert 保險
         """
         if x_skip.shape[2:] != x_up.shape[2:]:
             diff_y = x_skip.size()[2] - x_up.size()[2]
@@ -109,6 +110,10 @@ class AttentionUNet(nn.Module):
                 y_start = crop_y // 2
                 x_start = crop_x // 2
                 x_up = x_up[:, :, y_start:y_start + x_skip.size()[2], x_start:x_start + x_skip.size()[3]]
+        
+        # v2.4 斷言保護
+        assert x_skip.shape[2:] == x_up.shape[2:], \
+            f"Size mismatch after alignment: skip {x_skip.shape[2:]} vs up {x_up.shape[2:]}"
                 
         return torch.cat([x_skip, x_up], dim=1)
 

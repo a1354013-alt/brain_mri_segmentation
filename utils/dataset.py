@@ -1,5 +1,5 @@
 """
-BraTS Dataset implementation with I/O optimization and robust scanning (v2.3)
+BraTS Dataset implementation with memory-friendly scanning and cache control (v2.4)
 """
 import numpy as np
 import torch
@@ -13,12 +13,12 @@ import config
 
 class BraTSDataset(Dataset):
     """
-    針對 BraTS 資料集的 PyTorch Dataset 類別 (v2.3)
+    針對 BraTS 資料集的 PyTorch Dataset 類別 (v2.4)
     
     優化點：
-    1. 快取 nibabel dataobj proxy 以減少磁碟 I/O 開銷
-    2. 掃描日誌優化：僅列印前 10 筆錯誤，完整清單寫入 outputs/skipped_patients.txt
-    3. 移除內部 RNG，配合 DataLoader worker_init_fn
+    1. 記憶體友善掃描：使用 np.asarray(proxy) 避免 get_fdata() 造成記憶體膨脹
+    2. 快取開關：支援 config.USE_PROXY_CACHE，關閉時回退至每次讀檔以提升穩定性
+    3. 掃描日誌優化：僅列印前 10 筆錯誤，完整清單寫入 outputs/skipped_patients.txt
     """
     def __init__(
         self, 
@@ -63,7 +63,8 @@ class BraTSDataset(Dataset):
             
             try:
                 mask_proxy = nib.load(str(mask_file))
-                mask_volume = mask_proxy.get_fdata()
+                # v2.4 記憶體友善掃描：使用 np.asarray(proxy) 避免 get_fdata()
+                mask_volume = np.asarray(mask_proxy.dataobj)
                 mask_binary = (mask_volume > 0).astype(np.uint8)
                 
                 tumor_counts = np.sum(mask_binary, axis=(0, 1))
@@ -81,12 +82,13 @@ class BraTSDataset(Dataset):
                 }
                 self.valid_patient_ids.append(pid)
                 
-                # 預先載入 proxy (不載入整個 volume)
-                self.proxy_cache[pid] = {
-                    'seg': mask_proxy.dataobj
-                }
-                for mod in modalities:
-                    self.proxy_cache[pid][mod] = nib.load(str(p_path / f"{pid}_{mod}.nii.gz")).dataobj
+                # v2.4 快取開關控制
+                if config.USE_PROXY_CACHE:
+                    self.proxy_cache[pid] = {
+                        'seg': mask_proxy.dataobj
+                    }
+                    for mod in modalities:
+                        self.proxy_cache[pid][mod] = nib.load(str(p_path / f"{pid}_{mod}.nii.gz")).dataobj
                 
             except Exception as e:
                 skipped_patients.append((pid, [f"Error reading: {str(e)}"]))
@@ -116,7 +118,6 @@ class BraTSDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         pid = self.valid_patient_ids[idx]
         cache = self.patient_cache[pid]
-        proxies = self.proxy_cache[pid]
         
         if self.mode == 'train':
             slice_idx = np.random.choice(cache['tumor_indices'])
@@ -127,16 +128,26 @@ class BraTSDataset(Dataset):
         images = []
         
         for mod in modalities:
-            # 從快取的 proxy 讀取特定 slice
-            img_slice = np.array(proxies[mod][:, :, slice_idx])
+            if config.USE_PROXY_CACHE:
+                img_slice = np.array(self.proxy_cache[pid][mod][:, :, slice_idx])
+            else:
+                img_path = self.data_dir / pid / f"{pid}_{mod}.nii.gz"
+                img_proxy = nib.load(str(img_path))
+                img_slice = np.array(img_proxy.dataobj[:, :, slice_idx])
+                
             img_slice = self._normalize_image(img_slice)
             img_slice = resize(img_slice, (self.image_size, self.image_size), order=1, anti_aliasing=True, preserve_range=True)
             images.append(img_slice)
             
         image = np.stack(images, axis=0)
         
-        # 從快取的 proxy 讀取 mask slice
-        mask_slice = np.array(proxies['seg'][:, :, slice_idx])
+        if config.USE_PROXY_CACHE:
+            mask_slice = np.array(self.proxy_cache[pid]['seg'][:, :, slice_idx])
+        else:
+            mask_path = self.data_dir / pid / f"{pid}_seg.nii.gz"
+            mask_proxy = nib.load(str(mask_path))
+            mask_slice = np.array(mask_proxy.dataobj[:, :, slice_idx])
+            
         mask = resize(mask_slice, (self.image_size, self.image_size), order=0, anti_aliasing=False, preserve_range=True)
         mask = (mask > 0).astype(np.float32)
         

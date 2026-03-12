@@ -1,5 +1,5 @@
 """
-BraTS Dataset Download Helper Script with Robust Structure Validation (v2.3)
+BraTS Dataset Download Helper Script with Unified Validation (v2.4 Final)
 """
 import argparse
 import zipfile
@@ -7,38 +7,48 @@ import shutil
 from pathlib import Path
 
 
-def validate_and_align_structure(base_dir: Path) -> None:
+def is_patient_folder_complete(folder_path: Path) -> bool:
     """
-    驗證並自動對齊資料結構 (v2.3)：
-    1. 僅將包含完整 4 模態 + Seg 的資料夾視為 Patient Folder
-    2. 自動移動至 base_dir 的直接下一層
-    3. 強化錯誤處理與日誌
+    統一完整性檢查邏輯：必須包含 4 模態 + Seg
     """
-    print("🔍 Validating and aligning data structure...")
+    # 尋找資料夾內的 flair 檔案來推導 PID
+    flair_files = list(folder_path.glob("*_flair.nii.gz"))
+    if not flair_files:
+        return False
+    
+    pid = flair_files[0].name.replace('_flair.nii.gz', '')
     modalities = ['flair', 't1', 't1ce', 't2']
     
-    # 尋找所有包含 _flair.nii.gz 的檔案
-    flair_files = list(base_dir.rglob("*_flair.nii.gz"))
+    for mod in modalities:
+        if not (folder_path / f"{pid}_{mod}.nii.gz").exists():
+            return False
+    if not (folder_path / f"{pid}_seg.nii.gz").exists():
+        return False
+        
+    return True
+
+
+def validate_and_align_structure(base_dir: Path) -> None:
+    """
+    驗證並自動對齊資料結構 (v2.4)：
+    1. 統一使用 is_patient_folder_complete 進行判定
+    2. 自動從檔名推導 PID，不依賴資料夾名稱
+    3. 強化清理邏輯，確保不留殘餘不完整資料
+    """
+    print("🔍 Validating and aligning data structure...")
     
-    if not flair_files:
+    # 1. 尋找所有潛在的病人資料夾 (包含子目錄)
+    all_flair_files = list(base_dir.rglob("*_flair.nii.gz"))
+    
+    if not all_flair_files:
         print(f"❌ Error: No BraTS data found in {base_dir}.")
         return
 
     valid_patient_count = 0
-    for flair_f in flair_files:
+    for flair_f in all_flair_files:
         p_dir = flair_f.parent
-        pid = flair_f.name.replace('_flair.nii.gz', '')
         
-        # 檢查完整性
-        is_complete = True
-        for mod in modalities:
-            if not (p_dir / f"{pid}_{mod}.nii.gz").exists():
-                is_complete = False
-                break
-        if not (p_dir / f"{pid}_seg.nii.gz").exists():
-            is_complete = False
-            
-        if is_complete:
+        if is_patient_folder_complete(p_dir):
             # 如果資料夾不在 base_dir 的直接下一層，則移動它
             if p_dir.parent != base_dir:
                 target_dir = base_dir / p_dir.name
@@ -50,17 +60,12 @@ def validate_and_align_structure(base_dir: Path) -> None:
                         print(f"⚠️  Failed to move {p_dir.name}: {e}")
             valid_patient_count += 1
     
-    # 清理空資料夾或不完整資料夾
+    # 2. 清理邏輯 (v2.4)：統一完整性檢查
     print("🧹 Cleaning up invalid or empty folders...")
     for item in base_dir.iterdir():
         if item.is_dir():
-            # 檢查該資料夾是否為有效病人資料夾 (在 base_dir 下且完整)
-            is_valid = False
-            pid = item.name
-            if (item / f"{pid}_flair.nii.gz").exists() and (item / f"{pid}_seg.nii.gz").exists():
-                is_valid = True
-            
-            if not is_valid:
+            if not is_patient_folder_complete(item):
+                print(f"🗑️  Removing incomplete folder: {item.name}")
                 try:
                     shutil.rmtree(item)
                 except Exception as e:
