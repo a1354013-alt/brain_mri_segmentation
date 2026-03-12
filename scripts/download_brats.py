@@ -1,5 +1,5 @@
 """
-BraTS Dataset Download Helper Script with Structure Validation
+BraTS Dataset Download Helper Script with Robust Structure Validation (v2.3)
 """
 import argparse
 import zipfile
@@ -9,36 +9,64 @@ from pathlib import Path
 
 def validate_and_align_structure(base_dir: Path) -> None:
     """
-    驗證並自動對齊資料結構：data/Brats/<patient_id>/...
+    驗證並自動對齊資料結構 (v2.3)：
+    1. 僅將包含完整 4 模態 + Seg 的資料夾視為 Patient Folder
+    2. 自動移動至 base_dir 的直接下一層
+    3. 強化錯誤處理與日誌
     """
     print("🔍 Validating and aligning data structure...")
+    modalities = ['flair', 't1', 't1ce', 't2']
     
-    # 尋找包含 _flair.nii.gz 的資料夾
+    # 尋找所有包含 _flair.nii.gz 的檔案
     flair_files = list(base_dir.rglob("*_flair.nii.gz"))
     
     if not flair_files:
-        raise RuntimeError(f"❌ Error: No BraTS data found in {base_dir}. Expected *_flair.nii.gz files.")
-    
-    # 取得所有包含資料的實際資料夾
-    actual_data_dirs = sorted(list(set([f.parent for f in flair_files])))
-    
-    for p_dir in actual_data_dirs:
-        # 如果資料夾不在 base_dir 的直接下一層，則移動它
-        if p_dir.parent != base_dir:
-            target_dir = base_dir / p_dir.name
-            if not target_dir.exists():
-                print(f"📦 Moving {p_dir.name} to {base_dir}")
-                shutil.move(str(p_dir), str(target_dir))
-    
-    # 清理空資料夾
-    for item in base_dir.iterdir():
-        if item.is_dir() and not any(item.rglob("*_flair.nii.gz")):
-            try:
-                shutil.rmtree(item)
-            except:
-                pass
+        print(f"❌ Error: No BraTS data found in {base_dir}.")
+        return
 
-    print("✅ Final DATA_DIR structure validated.")
+    valid_patient_count = 0
+    for flair_f in flair_files:
+        p_dir = flair_f.parent
+        pid = flair_f.name.replace('_flair.nii.gz', '')
+        
+        # 檢查完整性
+        is_complete = True
+        for mod in modalities:
+            if not (p_dir / f"{pid}_{mod}.nii.gz").exists():
+                is_complete = False
+                break
+        if not (p_dir / f"{pid}_seg.nii.gz").exists():
+            is_complete = False
+            
+        if is_complete:
+            # 如果資料夾不在 base_dir 的直接下一層，則移動它
+            if p_dir.parent != base_dir:
+                target_dir = base_dir / p_dir.name
+                if not target_dir.exists():
+                    print(f"📦 Moving valid patient {p_dir.name} to {base_dir}")
+                    try:
+                        shutil.move(str(p_dir), str(target_dir))
+                    except Exception as e:
+                        print(f"⚠️  Failed to move {p_dir.name}: {e}")
+            valid_patient_count += 1
+    
+    # 清理空資料夾或不完整資料夾
+    print("🧹 Cleaning up invalid or empty folders...")
+    for item in base_dir.iterdir():
+        if item.is_dir():
+            # 檢查該資料夾是否為有效病人資料夾 (在 base_dir 下且完整)
+            is_valid = False
+            pid = item.name
+            if (item / f"{pid}_flair.nii.gz").exists() and (item / f"{pid}_seg.nii.gz").exists():
+                is_valid = True
+            
+            if not is_valid:
+                try:
+                    shutil.rmtree(item)
+                except Exception as e:
+                    print(f"⚠️  Could not remove {item}: {e}")
+
+    print(f"✅ Final DATA_DIR structure validated. Found {valid_patient_count} valid patients.")
 
 
 def check_data_exists(data_dir: Path) -> bool:
@@ -71,19 +99,16 @@ def auto_download_kaggle(data_dir: Path):
     zip_path = data_dir.parent / "brats20-dataset-training-validation.zip"
     
     try:
-        # 下載
         kaggle.api.dataset_download_files("awsaf49/brats20-dataset-training-validation", path=str(data_dir.parent), unzip=False)
         
-        # 使用 Python zipfile 解壓 (跨平台)
         print(f"⏳ Extracting {zip_path.name}...")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(data_dir)
         
-        # 結構對齊
         validate_and_align_structure(data_dir)
         
-        # 移除 zip
-        zip_path.unlink()
+        if zip_path.exists():
+            zip_path.unlink()
         return True
     except Exception as e:
         print(f"❌ Error during download/extraction: {e}")

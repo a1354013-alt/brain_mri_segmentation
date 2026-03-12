@@ -1,5 +1,5 @@
 """
-BraTS Dataset implementation with multi-worker RNG fix and I/O optimization
+BraTS Dataset implementation with I/O optimization and robust scanning (v2.3)
 """
 import numpy as np
 import torch
@@ -8,16 +8,17 @@ import nibabel as nib
 from skimage.transform import resize
 from pathlib import Path
 from typing import List, Optional, Tuple, Callable
+import config
 
 
 class BraTSDataset(Dataset):
     """
-    針對 BraTS 資料集的 PyTorch Dataset 類別
+    針對 BraTS 資料集的 PyTorch Dataset 類別 (v2.3)
     
-    修正點：
-    1. 移除內部 RNG，改用 np.random.choice 以配合 DataLoader worker_init_fn
-    2. 強化完整性檢查：必須包含 4 模態 (flair, t1, t1ce, t2) + seg
-    3. 優化 Resize 參數：image (order=1, anti_aliasing=True), mask (order=0)
+    優化點：
+    1. 快取 nibabel dataobj proxy 以減少磁碟 I/O 開銷
+    2. 掃描日誌優化：僅列印前 10 筆錯誤，完整清單寫入 outputs/skipped_patients.txt
+    3. 移除內部 RNG，配合 DataLoader worker_init_fn
     """
     def __init__(
         self, 
@@ -34,6 +35,7 @@ class BraTSDataset(Dataset):
         
         self.valid_patient_ids = []
         self.patient_cache = {}
+        self.proxy_cache = {} # 快取 dataobj proxy
         
         self._prepare_dataset(patient_ids)
 
@@ -60,7 +62,8 @@ class BraTSDataset(Dataset):
                 continue
             
             try:
-                mask_volume = nib.load(str(mask_file)).get_fdata()
+                mask_proxy = nib.load(str(mask_file))
+                mask_volume = mask_proxy.get_fdata()
                 mask_binary = (mask_volume > 0).astype(np.uint8)
                 
                 tumor_counts = np.sum(mask_binary, axis=(0, 1))
@@ -78,12 +81,25 @@ class BraTSDataset(Dataset):
                 }
                 self.valid_patient_ids.append(pid)
                 
+                # 預先載入 proxy (不載入整個 volume)
+                self.proxy_cache[pid] = {
+                    'seg': mask_proxy.dataobj
+                }
+                for mod in modalities:
+                    self.proxy_cache[pid][mod] = nib.load(str(p_path / f"{pid}_{mod}.nii.gz")).dataobj
+                
             except Exception as e:
                 skipped_patients.append((pid, [f"Error reading: {str(e)}"]))
 
         if skipped_patients:
-            print(f"⚠️  Skipped {len(skipped_patients)} incomplete patients (missing required modalities or seg):")
-            for pid, files in skipped_patients:
+            config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            with open(config.SKIPPED_LOG, 'w') as f:
+                for pid, files in skipped_patients:
+                    f.write(f"{pid}: Missing {', '.join(files)}\n")
+            
+            print(f"⚠️  Skipped {len(skipped_patients)} patients. Full list in {config.SKIPPED_LOG}")
+            print("   First 10 skipped patients:")
+            for pid, files in skipped_patients[:10]:
                 print(f"   - {pid}: Missing {', '.join(files)}")
         
         print(f"✅ Dataset ready: {len(self.valid_patient_ids)} valid patients.")
@@ -99,11 +115,10 @@ class BraTSDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         pid = self.valid_patient_ids[idx]
-        p_path = self.data_dir / pid
         cache = self.patient_cache[pid]
+        proxies = self.proxy_cache[pid]
         
         if self.mode == 'train':
-            # 使用 np.random.choice 配合 worker_init_fn
             slice_idx = np.random.choice(cache['tumor_indices'])
         else:
             slice_idx = cache['best_idx']
@@ -112,21 +127,16 @@ class BraTSDataset(Dataset):
         images = []
         
         for mod in modalities:
-            img_path = p_path / f"{pid}_{mod}.nii.gz"
-            img_proxy = nib.load(str(img_path))
-            img_slice = np.array(img_proxy.dataobj[:, :, slice_idx])
-            
+            # 從快取的 proxy 讀取特定 slice
+            img_slice = np.array(proxies[mod][:, :, slice_idx])
             img_slice = self._normalize_image(img_slice)
-            # image: order=1, anti_aliasing=True
             img_slice = resize(img_slice, (self.image_size, self.image_size), order=1, anti_aliasing=True, preserve_range=True)
             images.append(img_slice)
             
         image = np.stack(images, axis=0)
         
-        mask_path = p_path / f"{pid}_seg.nii.gz"
-        mask_proxy = nib.load(str(mask_path))
-        mask_slice = np.array(mask_proxy.dataobj[:, :, slice_idx])
-        # mask: order=0
+        # 從快取的 proxy 讀取 mask slice
+        mask_slice = np.array(proxies['seg'][:, :, slice_idx])
         mask = resize(mask_slice, (self.image_size, self.image_size), order=0, anti_aliasing=False, preserve_range=True)
         mask = (mask > 0).astype(np.float32)
         

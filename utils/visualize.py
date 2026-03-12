@@ -1,5 +1,5 @@
 """
-Visualization utilities with parameterized threshold and MC Dropout
+Visualization utilities with parameterized threshold and MC Dropout (v2.3)
 """
 import matplotlib.pyplot as plt
 import torch
@@ -43,12 +43,13 @@ def mc_dropout_inference(
     mean_pred = np.mean(preds, axis=0)
     
     if method == 'entropy':
+        # Predictive Entropy: -p*log(p) - (1-p)*log(1-p)
         p = np.clip(mean_pred, 1e-8, 1.0 - 1e-8)
         uncertainty = -(p * np.log(p) + (1 - p) * np.log(1 - p))
     else:
+        # Variance
         uncertainty = np.var(preds, axis=0)
     
-    # 使用 config.THRESHOLD
     prediction = (mean_pred > config.THRESHOLD).astype(np.float32)
     return prediction, uncertainty
 
@@ -71,10 +72,10 @@ def plot_results_with_uncertainty(
     axes[3].set_title("Uncertainty Map"); axes[3].axis('off')
     plt.colorbar(im, ax=axes[3], fraction=0.046, pad=0.04)
     
-    # Overlay
+    # Overlay (v2.3 簡化邏輯)
     overlay = np.stack([image[0]]*3, axis=-1)
     overlay = (overlay - overlay.min()) / (overlay.max() - overlay.min() + 1e-8)
-    overlay[prediction[0] > config.THRESHOLD, 0] = 1.0 # Red
+    overlay[prediction[0] > 0, 0] = 1.0 # Red channel for prediction
     axes[4].imshow(overlay); axes[4].set_title("Overlay"); axes[4].axis('off')
     
     plt.suptitle(title, fontsize=16, fontweight='bold')

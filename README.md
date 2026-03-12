@@ -1,60 +1,54 @@
-# Brain MRI Tumor Segmentation (v2.2)
+# Brain MRI Tumor Segmentation (v2.3 Final)
 
 基於 **Attention U-Net** 的腦部 MRI 腫瘤分割專案，支援不確定性估計與高效 I/O。
 
 ---
 
-## 📋 專案更新亮點 (v2.2)
+## 📋 專案更新亮點 (v2.3)
 
-- **資料完整性強化**：本專案嚴格要求 **4 模態 (flair, t1, t1ce, t2) + seg**。`dataset.py` 會自動過濾不完整的病人資料。
-- **多 Worker RNG 修正**：修正了 DataLoader 在多 worker 模式下隨機切片重複的問題。透過 `worker_init_fn` 確保每個 worker 擁有獨立且可重現的隨機種子。
-- **全面參數 Config 化**：`THRESHOLD` (預設 0.5) 與 `MC_ITERATIONS` (預設 20) 已移至 `config.py`，修改後會即時影響訓練評估與推論行為。
-- **跨平台資料對齊**：`download_brats.py` 改用 Python `zipfile` 進行解壓，並具備自動結構對齊功能，確保資料夾結構符合 `data/Brats/<patient_id>/...`。
-- **Checkpoint 一致性**：`best_checkpoint.pth` 現在完整包含 `scheduler_state_dict`，確保訓練可恢復性。
-- **模型尺寸保護**：內建 Padding Helper，自動對齊 Encoder/Decoder 尺寸，避免非 2 的冪次方輸入導致崩潰。
-- **空資料保護**：所有 CLI 命令均加入空資料檢查，避免 IndexError。
+- **模型尺寸雙重保護**：修正了 `_align_and_concat` 中的負 Padding 風險。現在模型能自動判斷特徵圖尺寸，若 `x_up` 較小則 Padding，若較大則執行 **Center Crop**，確保在任何輸入尺寸下都能穩定運行。
+- **多 Worker Seed 強化**：`worker_init_fn` 現在同步固定 `torch.manual_seed`，徹底解決多線程資料加載時的隨機性重複問題。
+- **I/O 效能優化**：`BraTSDataset` 實作了 **nibabel dataobj proxy 快取**。僅在初始化時讀取檔案指針，`__getitem__` 時直接從 Proxy 讀取特定切片，大幅減少重複開啟檔案的開銷。
+- **路徑一致性強化**：`Trainer` 現在完全由外部傳入 `log_file` 與 `tensorboard_dir`，確保 Demo 模式與正式訓練的輸出路徑嚴格隔離且符合 `config.py` 定義。
+- **掃描日誌優化**：資料掃描時不再洗版，僅列印前 10 筆錯誤，完整清單自動儲存至 `outputs/skipped_patients.txt`。
+- **結構對齊加固**：`download_brats.py` 採用更嚴格的移動策略，僅在確認資料夾包含完整 4 模態 + Seg 後才視為有效病人並進行對齊。
 
 ---
 
 ## 🏗️ 技術細節
 
-### 1. 任務定義
-本專案執行 **Whole Tumor (WT)** 二元分割。所有標籤值大於 0 的區域均被視為腫瘤區域。
+### 1. 不確定性指標說明
+- **Variance (變異數)**：衡量多次 MC Dropout 預測值的離散程度。
+- **Entropy (預測熵)**：計算 **Predictive Entropy**（基於平均預測機率 $p$）。公式為：$-p \log(p) - (1-p) \log(1-p)$。這能反映模型對分類結果的混亂程度。
 
-### 2. 切分策略
-採用 **Patient-level Split**。首先對所有病人 ID 進行隨機洗牌 (`shuffle`)，再依比例切分。這確保了同一病人的不同切片不會同時出現在訓練集與驗證集中，避免資料洩漏。
+### 2. 資料完整性
+本專案要求每個病人資料夾必須包含：
+- `*_flair.nii.gz`, `*_t1.nii.gz`, `*_t1ce.nii.gz`, `*_t2.nii.gz`
+- `*_seg.nii.gz`
 
-### 3. 可重現性說明
-專案預設開啟 `torch.backends.cudnn.deterministic = True`。這能確保實驗結果的可重現性，但在某些 GPU 環境下可能會略微降低運算速度。
-
-### 4. Resize 策略
-- **影像 (Image)**：使用 `order=1` (Bilinear) 並開啟 `anti_aliasing=True` 以保持細節。
-- **標籤 (Mask)**：使用 `order=0` (Nearest Neighbor) 以確保標籤值保持為二元。
+### 3. 尺寸保護邏輯
+在 Decoder 階段，若 `ConvTranspose2d` 產生的尺寸與 Encoder 的 Skip Connection 尺寸不符（常見於輸入尺寸非 16 的倍數時），模型會自動執行對齊：
+- **Padding**：補齊缺失像素。
+- **Center Crop**：裁切多餘像素。
 
 ---
 
-## 🚀 快速開始
+## 🚀 執行指令
 
-### 1. 環境安裝
+### 1. 資料準備
 ```bash
-pip install -r requirements.txt
-```
-
-### 2. 資料準備
-```bash
-# 自動下載並對齊結構
 python scripts/download_brats.py --auto
 ```
 
-### 3. 執行命令
+### 2. 訓練與推論
 ```bash
-# 訓練模式
+# 訓練
 python main.py train
 
-# 推論模式
-python main.py infer --patient_id BraTS20_Training_001 --uncertainty entropy
+# 推論 (支援 config.MC_ITERATIONS)
+python main.py infer --uncertainty entropy
 
-# Demo 模式 (輸出隔離至 outputs/demo/)
+# Demo (使用 config.DEMO_MC_ITERATIONS，輸出隔離)
 python main.py demo
 ```
 
@@ -63,14 +57,14 @@ python main.py demo
 ## 📁 專案結構
 ```
 brain_mri_segmentation/
-├── config.py              # 全面參數配置
-├── main.py                # CLI 入口 (含 Worker RNG 修正)
-├── train.py               # 訓練邏輯 (含 Scheduler Checkpoint)
+├── config.py              # 核心配置 (含 THRESHOLD, MC_ITERATIONS)
+├── main.py                # CLI 入口 (含 Worker Seed 修正)
+├── train.py               # 訓練邏輯 (路徑完全 Config 化)
 ├── models/
-│   └── attention_unet.py  # 具備尺寸對齊保護的模型
+│   └── attention_unet.py  # 具備 Padding/Crop 雙重保護的模型
 ├── utils/
-│   ├── dataset.py         # 4 模態檢查與 RNG 優化
-│   └── visualize.py       # 參數化視覺化
+│   ├── dataset.py         # Proxy 快取與日誌優化
+│   └── visualize.py       # 視覺化與 MC Dropout 邏輯簡化
 └── scripts/
-    └── download_brats.py  # 跨平台解壓與結構對齊
+    └── download_brats.py  # 加固的結構對齊腳本
 ```

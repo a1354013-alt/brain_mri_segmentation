@@ -1,5 +1,5 @@
 """
-Main CLI for Brain MRI Segmentation Project with robust data handling
+Main CLI for Brain MRI Segmentation Project (v2.3)
 """
 import argparse
 import torch
@@ -16,11 +16,12 @@ from train import Trainer
 
 def worker_init_fn(worker_id):
     """
-    修正多 worker RNG 問題
+    修正多 worker RNG 問題 (v2.3)：包含 torch seed
     """
     seed = config.RANDOM_SEED + worker_id
     np.random.seed(seed)
     random.seed(seed)
+    torch.manual_seed(seed)
 
 
 def get_patient_ids(data_dir: Path) -> list:
@@ -49,7 +50,6 @@ def train_command(args):
     train_dataset = BraTSDataset(config.DATA_DIR, train_ids, config.IMAGE_SIZE, mode='train')
     val_dataset = BraTSDataset(config.DATA_DIR, val_ids, config.IMAGE_SIZE, mode='val')
     
-    # 加入 worker_init_fn
     train_loader = DataLoader(
         train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, 
         num_workers=config.NUM_WORKERS, worker_init_fn=worker_init_fn
@@ -63,7 +63,9 @@ def train_command(args):
     
     trainer = Trainer(
         model=model, train_loader=train_loader, val_loader=val_loader, device=config.DEVICE,
-        output_dir=config.OUTPUT_DIR, checkpoint_path=config.CHECKPOINT_PATH, model_state_path=config.MODEL_STATE_PATH
+        output_dir=config.OUTPUT_DIR, checkpoint_path=config.CHECKPOINT_PATH, 
+        model_state_path=config.MODEL_STATE_PATH, log_file=config.LOG_FILE,
+        tensorboard_dir=config.TENSORBOARD_DIR
     )
     trainer.train(epochs=config.EPOCHS)
 
@@ -98,7 +100,6 @@ def infer_command(args):
         
     image, mask = dataset[0]
     
-    # 使用 config.MC_ITERATIONS
     prediction, uncertainty = mc_dropout_inference(
         model, image.unsqueeze(0), n_iterations=config.MC_ITERATIONS, method=args.uncertainty
     )
@@ -124,17 +125,18 @@ def demo_command(args):
     
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
     
-    # Demo 模式輸出隔離
+    # Demo 模式輸出隔離 (v2.3 統一路徑配置)
     trainer = Trainer(
         model=model, train_loader=train_loader, val_loader=train_loader, device=config.DEVICE,
-        output_dir=config.DEMO_OUTPUT_DIR, checkpoint_path=config.DEMO_CHECKPOINT_PATH, model_state_path=config.DEMO_MODEL_STATE_PATH,
-        use_amp=False
+        output_dir=config.DEMO_OUTPUT_DIR, checkpoint_path=config.DEMO_CHECKPOINT_PATH, 
+        model_state_path=config.DEMO_MODEL_STATE_PATH, log_file=config.DEMO_LOG_FILE,
+        tensorboard_dir=config.DEMO_TENSORBOARD_DIR, use_amp=False
     )
     trainer.train(epochs=1)
     
-    # Demo 推論
+    # Demo 推論 (使用 config.DEMO_MC_ITERATIONS)
     image, mask = train_dataset[0]
-    prediction, uncertainty = mc_dropout_inference(model, image.unsqueeze(0), n_iterations=5)
+    prediction, uncertainty = mc_dropout_inference(model, image.unsqueeze(0), n_iterations=config.DEMO_MC_ITERATIONS)
     save_path = config.DEMO_OUTPUT_DIR / "demo_inference.png"
     plot_results_with_uncertainty(image.numpy(), mask.numpy(), prediction[0], uncertainty[0], save_path=save_path)
     print(f"✅ Demo completed. Results in {config.DEMO_OUTPUT_DIR}")

@@ -1,5 +1,5 @@
 """
-Attention U-Net implementation with robust input size protection
+Attention U-Net implementation with robust input size protection (v2.3)
 """
 import torch
 import torch.nn as nn
@@ -87,15 +87,29 @@ class AttentionUNet(nn.Module):
 
     def _align_and_concat(self, x_skip: torch.Tensor, x_up: torch.Tensor) -> torch.Tensor:
         """
-        對齊保護：若尺寸不一致，對 x_up 進行 Padding 以對齊 x_skip
+        尺寸對齊保護 (v2.3)：
+        1. 若 x_up 較小 (diff > 0) -> 使用 Padding
+        2. 若 x_up 較大 (diff < 0) -> 使用 Center Crop
         """
         if x_skip.shape[2:] != x_up.shape[2:]:
             diff_y = x_skip.size()[2] - x_up.size()[2]
             diff_x = x_skip.size()[3] - x_up.size()[3]
             
-            # 使用 F.pad 進行對齊 (left, right, top, bottom)
-            x_up = F.pad(x_up, [diff_x // 2, diff_x - diff_x // 2,
-                                diff_y // 2, diff_y - diff_y // 2])
+            # 處理 Padding (diff > 0)
+            pad_y = max(0, diff_y)
+            pad_x = max(0, diff_x)
+            if pad_y > 0 or pad_x > 0:
+                x_up = F.pad(x_up, [pad_x // 2, pad_x - pad_x // 2,
+                                    pad_y // 2, pad_y - pad_y // 2])
+            
+            # 處理 Crop (diff < 0)
+            crop_y = max(0, -diff_y)
+            crop_x = max(0, -diff_x)
+            if crop_y > 0 or crop_x > 0:
+                y_start = crop_y // 2
+                x_start = crop_x // 2
+                x_up = x_up[:, :, y_start:y_start + x_skip.size()[2], x_start:x_start + x_skip.size()[3]]
+                
         return torch.cat([x_skip, x_up], dim=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

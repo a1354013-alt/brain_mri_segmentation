@@ -1,5 +1,5 @@
 """
-Training module with scheduler checkpointing and parameterized threshold
+Training module with robust path handling and scheduler checkpointing (v2.3)
 """
 import csv
 import torch
@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import Tuple, Dict, List
+from typing import Tuple, Dict, List, Optional
 import config
 
 
@@ -47,6 +47,8 @@ class Trainer:
         output_dir: Path,
         checkpoint_path: Path,
         model_state_path: Path,
+        log_file: Path,
+        tensorboard_dir: Path,
         use_amp: bool = True
     ):
         self.model = model
@@ -56,6 +58,7 @@ class Trainer:
         self.output_dir = output_dir
         self.checkpoint_path = checkpoint_path
         self.model_state_path = model_state_path
+        self.log_file = log_file
         self.use_amp = use_amp
         
         self.criterion = DiceLoss()
@@ -63,7 +66,7 @@ class Trainer:
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='max', factor=0.5, patience=5)
         self.scaler = GradScaler() if use_amp else None
         
-        self.writer = SummaryWriter(str(output_dir / "tensorboard"))
+        self.writer = SummaryWriter(str(tensorboard_dir))
         self.history = {'train_loss': [], 'val_loss': [], 'val_dice': [], 'lr': []}
         self.best_dice = 0.0
         
@@ -104,13 +107,11 @@ class Trainer:
                 outputs = self.model(images)
                 val_loss += self.criterion(outputs, masks).item()
                 
-                # 使用 config.THRESHOLD
                 preds = (torch.sigmoid(outputs) > config.THRESHOLD).float()
                 val_dice += dice_coeff(preds, masks).item()
         return val_loss / len(self.val_loader), val_dice / len(self.val_loader)
     
     def save_checkpoints(self, epoch: int, dice: float) -> None:
-        # 1. 儲存完整 Checkpoint (包含 scheduler)
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
@@ -119,9 +120,8 @@ class Trainer:
             'dice': dice,
             'history': self.history
         }
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(checkpoint, self.checkpoint_path)
-        
-        # 2. 儲存純模型權重
         torch.save(self.model.state_dict(), self.model_state_path)
         print(f"✓ Checkpoints saved to {self.output_dir}")
     
@@ -153,8 +153,8 @@ class Trainer:
         self.writer.close()
 
     def save_log(self) -> None:
-        log_path = self.output_dir / "training_log.csv"
-        with open(log_path, 'w', newline='') as f:
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.log_file, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['epoch', 'train_loss', 'val_loss', 'val_dice', 'lr'])
             for i in range(len(self.history['train_loss'])):
@@ -165,7 +165,7 @@ class Trainer:
         axes[0].plot(self.history['train_loss'], label='Train')
         axes[0].plot(self.history['val_loss'], label='Val')
         axes[0].set_title('Loss'); axes[0].legend()
-        axes[1].plot(self.history['val_dice'], label='Val Dice', color='green')
+        axes[1].plot(self.history['val_dice'], label='Val Dice')
         axes[1].set_title('Dice'); axes[1].legend()
         plt.savefig(self.output_dir / "loss_curve.png")
         plt.close()

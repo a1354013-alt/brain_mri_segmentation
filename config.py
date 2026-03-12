@@ -1,5 +1,5 @@
 """
-Configuration file for Brain MRI Segmentation Project
+Configuration file for Brain MRI Segmentation Project (v2.3)
 """
 import torch
 import random
@@ -14,12 +14,14 @@ CHECKPOINT_PATH = OUTPUT_DIR / "best_checkpoint.pth"
 MODEL_STATE_PATH = OUTPUT_DIR / "best_model_state.pth"
 LOG_FILE = OUTPUT_DIR / "training_log.csv"
 TENSORBOARD_DIR = OUTPUT_DIR / "tensorboard"
+SKIPPED_LOG = OUTPUT_DIR / "skipped_patients.txt"
 
 # Demo 模式路徑
 DEMO_OUTPUT_DIR = OUTPUT_DIR / "demo"
 DEMO_CHECKPOINT_PATH = DEMO_OUTPUT_DIR / "best_checkpoint_demo.pth"
 DEMO_MODEL_STATE_PATH = DEMO_OUTPUT_DIR / "best_model_state_demo.pth"
 DEMO_TENSORBOARD_DIR = DEMO_OUTPUT_DIR / "tensorboard"
+DEMO_LOG_FILE = DEMO_OUTPUT_DIR / "training_log_demo.csv"
 
 # ==================== 模型參數 ====================
 N_CHANNELS = 4  # FLAIR, T1, T1ce, T2
@@ -41,6 +43,7 @@ NUM_WORKERS = 4
 
 # ==================== MC Dropout 參數 ====================
 MC_ITERATIONS = 20
+DEMO_MC_ITERATIONS = 5
 
 # ==================== 裝置設定 ====================
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
