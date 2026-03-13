@@ -1,5 +1,5 @@
 """
-Main CLI for Brain MRI Segmentation Project (v2.6 Final Gold Master)
+Main CLI for Brain MRI Segmentation Project (v2.7 Final Gold Master Corrected)
 """
 import argparse
 import torch
@@ -16,7 +16,7 @@ from train import Trainer
 
 def worker_init_fn(worker_id):
     """
-    修正多 worker RNG 問題 (v2.6)：包含 torch seed
+    修正多 worker RNG 問題 (v2.7 Final)
     """
     seed = config.RANDOM_SEED + worker_id
     np.random.seed(seed)
@@ -47,11 +47,15 @@ def train_command(args):
     train_ids = patient_ids[:split_idx]
     val_ids = patient_ids[split_idx:]
     
-    # v2.6 實作快取共享，避免重複掃描
+    print(f"📊 Data Split: {len(train_ids)} train, {len(val_ids)} val")
+    print(f"🔍 Train PIDs (first 3): {train_ids[:3]}")
+    print(f"🔍 Val PIDs (first 3): {val_ids[:3]}")
+    
+    # v2.7 Final 實作快取共享子集化
     train_dataset = BraTSDataset(config.DATA_DIR, train_ids, config.IMAGE_SIZE, mode='train')
     shared_cache = train_dataset.get_cache()
     
-    # 驗證集使用共享快取
+    # 驗證集使用共享快取，但僅提取 val_ids 對應的子集
     val_dataset = BraTSDataset(config.DATA_DIR, val_ids, config.IMAGE_SIZE, mode='val', prepared_cache=shared_cache)
     
     train_loader = DataLoader(
@@ -70,7 +74,10 @@ def train_command(args):
     trainer = Trainer(
         model=model, train_loader=train_loader, val_loader=val_loader, device=config.DEVICE,
         output_dir=config.OUTPUT_DIR, checkpoint_path=config.CHECKPOINT_PATH, 
-        model_state_path=config.MODEL_STATE_PATH, log_file=config.LOG_FILE,
+        model_state_path=config.MODEL_STATE_PATH, 
+        last_checkpoint_path=config.LAST_CHECKPOINT_PATH,
+        last_model_state_path=config.LAST_MODEL_STATE_PATH,
+        log_file=config.LOG_FILE,
         tensorboard_dir=config.TENSORBOARD_DIR, use_amp=use_amp, total_epochs=config.EPOCHS
     )
     trainer.train()
@@ -100,7 +107,7 @@ def infer_command(args):
     target_patient = args.patient_id
     dataset = None
     
-    # v2.6 輕量化驗證邏輯
+    # v2.7 Final 輕量化驗證邏輯
     if target_patient:
         if BraTSDataset.quick_validate_patient(config.DATA_DIR, target_patient):
             dataset = BraTSDataset(config.DATA_DIR, [target_patient], config.IMAGE_SIZE, mode='val')
@@ -142,7 +149,6 @@ def demo_command(args):
         
     demo_ids = []
     for pid in patient_ids:
-        # v2.6 輕量化驗證
         if BraTSDataset.quick_validate_patient(config.DATA_DIR, pid):
             demo_ids.append(pid)
         if len(demo_ids) >= 2:
@@ -153,7 +159,6 @@ def demo_command(args):
         return
     
     train_dataset = BraTSDataset(config.DATA_DIR, demo_ids, config.IMAGE_SIZE, mode='train')
-    # v2.6 Demo 模式指定 num_workers=0 以確保行為一致
     train_loader = DataLoader(train_dataset, batch_size=1, num_workers=0, worker_init_fn=worker_init_fn)
     
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
@@ -161,7 +166,10 @@ def demo_command(args):
     trainer = Trainer(
         model=model, train_loader=train_loader, val_loader=train_loader, device=config.DEVICE,
         output_dir=config.DEMO_OUTPUT_DIR, checkpoint_path=config.DEMO_CHECKPOINT_PATH, 
-        model_state_path=config.DEMO_MODEL_STATE_PATH, log_file=config.DEMO_LOG_FILE,
+        model_state_path=config.DEMO_MODEL_STATE_PATH, 
+        last_checkpoint_path=config.DEMO_LAST_CHECKPOINT_PATH,
+        last_model_state_path=config.DEMO_LAST_MODEL_STATE_PATH,
+        log_file=config.DEMO_LOG_FILE,
         tensorboard_dir=config.DEMO_TENSORBOARD_DIR, use_amp=False, total_epochs=1
     )
     trainer.train()

@@ -1,37 +1,26 @@
 """
-BraTS Dataset implementation with shared cache and lightweight validation (v2.6)
+BraTS Dataset with optimized I/O, shared cache subsetting, and memory-friendly scanning (v2.7 Final)
 """
-import numpy as np
-import torch
-from torch.utils.data import Dataset
 import nibabel as nib
-from skimage.transform import resize
+import numpy as np
+from torch.utils.data import Dataset
 from pathlib import Path
-from typing import List, Optional, Tuple, Callable, Dict
+from typing import List, Dict, Optional, Tuple
 import config
 
 
 class BraTSDataset(Dataset):
-    """
-    針對 BraTS 資料集的 PyTorch Dataset 類別 (v2.6)
-    
-    優化點：
-    1. 快取共享：支援傳入外部 prepared_cache，避免重複掃描。
-    2. 輕量化驗證：提供 quick_validate_patient 靜態方法。
-    3. 逐切片掃描：極致節省記憶體。
-    """
     def __init__(
         self, 
         data_dir: Path, 
         patient_ids: List[str], 
-        image_size: int = 128,
-        transform: Optional[Callable] = None, 
+        image_size: int = 128, 
         mode: str = 'train',
         prepared_cache: Optional[Dict] = None
     ):
         self.data_dir = data_dir
+        self.patient_ids = patient_ids
         self.image_size = image_size
-        self.transform = transform
         self.mode = mode
         
         self.valid_patient_ids = []
@@ -39,149 +28,179 @@ class BraTSDataset(Dataset):
         self.proxy_cache = {}
         
         if prepared_cache:
-            self.valid_patient_ids = prepared_cache['valid_patient_ids']
-            self.patient_cache = prepared_cache['patient_cache']
-            self.proxy_cache = prepared_cache.get('proxy_cache', {})
-            print(f"🚀 Dataset initialized with shared cache ({len(self.valid_patient_ids)} patients).")
+            # v2.7 Final: 修正快取共享子集化邏輯，確保訓練/驗證集分離
+            cache_valid = prepared_cache.get("valid_patient_ids", [])
+            cache_data = prepared_cache.get("patient_cache", {})
+            cache_proxy = prepared_cache.get("proxy_cache", {})
+            
+            missing_in_cache = []
+            for pid in patient_ids:
+                if pid in cache_valid:
+                    self.valid_patient_ids.append(pid)
+                    self.patient_cache[pid] = cache_data[pid]
+                    if config.USE_PROXY_CACHE:
+                        self.proxy_cache[pid] = cache_proxy.get(pid)
+                else:
+                    # v2.7 Final: 收集缺失 PID 以便後續統一輸出
+                    missing_in_cache.append(pid)
+            
+            # v2.7 Final: 統一輸出快取缺失摘要，避免洗版
+            if missing_in_cache:
+                n_missing = len(missing_in_cache)
+                print(f"⚠️  Prepared cache missing {n_missing} patients from provided list.")
+                print(f"💡 Showing first 10 missing: {missing_in_cache[:10]}")
+                
+                # 記錄完整缺失清單至檔案
+                log_path = config.OUTPUT_DIR / "prepared_cache_missing.txt"
+                config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+                with open(log_path, "w") as f:
+                    f.write("\n".join(missing_in_cache))
+                print(f"📝 Full missing list saved to {log_path}")
+                
+            if not self.valid_patient_ids:
+                print(f"❌ Error: No valid patients in provided patient_ids after filtering prepared_cache.")
         else:
-            self._prepare_dataset(patient_ids)
+            self._prepare_dataset()
+
+    def _prepare_dataset(self):
+        """
+        掃描資料夾並預先計算切片索引 (v2.7 Final: 記憶體友善掃描)
+        """
+        skipped_patients = []
+        print(f"🔍 Scanning {len(self.patient_ids)} patients for {self.mode}...")
+        
+        for pid in self.patient_ids:
+            p_dir = self.data_dir / pid
+            # 檢查 4 模態 + Seg
+            modalities = ['flair', 't1', 't1ce', 't2']
+            files = {mod: p_dir / f"{pid}_{mod}.nii.gz" for mod in modalities}
+            files['seg'] = p_dir / f"{pid}_seg.nii.gz"
+            
+            if not all(f.exists() for f in files.values()):
+                skipped_patients.append(f"Missing: {pid}")
+                continue
+            
+            try:
+                # 記憶體友善掃描：僅讀取 Seg 標籤
+                mask_proxy = nib.load(str(files['seg']))
+                # 使用 np.asarray(proxy.dataobj) 避免 get_fdata() 的 float64 轉換與記憶體膨脹
+                mask_data = np.asarray(mask_proxy.dataobj)
+                
+                # 找出所有含腫瘤的切片索引 (Whole Tumor: mask > 0)
+                # v2.7 Final: 逐切片掃描以極致節省記憶體
+                tumor_counts = []
+                for i in range(mask_data.shape[2]):
+                    tumor_counts.append(np.count_nonzero(mask_data[:, :, i] > 0))
+                
+                tumor_slice_indices = [i for i, count in enumerate(tumor_counts) if count > 0]
+                
+                if not tumor_slice_indices:
+                    skipped_patients.append(f"NoTumor: {pid}")
+                    continue
+                
+                # 驗證集固定使用腫瘤最多的切片
+                val_best_slice_idx = int(np.argmax(tumor_counts))
+                
+                self.valid_patient_ids.append(pid)
+                self.patient_cache[pid] = {
+                    'files': {k: str(v) for k, v in files.items()},
+                    'tumor_slice_indices': tumor_slice_indices,
+                    'val_best_slice_idx': val_best_slice_idx
+                }
+                
+                # 若開啟 Proxy 快取，則快取 nibabel 對象以提升 I/O 效能
+                if config.USE_PROXY_CACHE:
+                    self.proxy_cache[pid] = {mod: nib.load(str(files[mod])) for mod in modalities}
+                    self.proxy_cache[pid]['seg'] = mask_proxy
+                    
+            except Exception as e:
+                skipped_patients.append(f"ReadError: {pid} ({str(e)})")
+        
+        if skipped_patients:
+            print(f"⚠️  Skipped {len(skipped_patients)} patients. (First 10 shown in log)")
+            log_path = config.OUTPUT_DIR / "skipped_patients.txt"
+            config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "w") as f:
+                f.write("\n".join(skipped_patients))
+            print(f"📝 Full skip list saved to {log_path}")
+
+    def get_cache(self) -> Dict:
+        return {
+            "valid_patient_ids": self.valid_patient_ids,
+            "patient_cache": self.patient_cache,
+            "proxy_cache": self.proxy_cache
+        }
 
     @staticmethod
     def quick_validate_patient(data_dir: Path, pid: str) -> bool:
         """
-        輕量化驗證：僅檢查檔案存在，不讀取內容 (v2.6)
+        輕量化驗證：僅檢查檔案是否存在 (v2.7 Final)
         """
-        p_path = data_dir / pid
+        p_dir = data_dir / pid
         modalities = ['flair', 't1', 't1ce', 't2', 'seg']
         for mod in modalities:
-            if not (p_path / f"{pid}_{mod}.nii.gz").exists():
+            if not (p_dir / f"{pid}_{mod}.nii.gz").exists():
                 return False
         return True
 
-    def _prepare_dataset(self, patient_ids: List[str]) -> None:
-        skipped_patients = []
-        modalities = ['flair', 't1', 't1ce', 't2']
-        
-        print(f"🔍 Scanning {len(patient_ids)} patients for 4-modality integrity...")
-        
-        for pid in patient_ids:
-            p_path = self.data_dir / pid
-            missing_files = []
-            
-            for mod in modalities:
-                if not (p_path / f"{pid}_{mod}.nii.gz").exists():
-                    missing_files.append(f"{pid}_{mod}.nii.gz")
-            
-            mask_file = p_path / f"{pid}_seg.nii.gz"
-            if not mask_file.exists():
-                missing_files.append(f"{pid}_seg.nii.gz")
-            
-            if missing_files:
-                skipped_patients.append((pid, missing_files))
-                continue
-            
-            try:
-                mask_proxy = nib.load(str(mask_file))
-                n_slices = mask_proxy.shape[2]
-                
-                # 逐切片掃描
-                tumor_counts = []
-                for s in range(n_slices):
-                    slice_data = np.asarray(mask_proxy.dataobj[:, :, s])
-                    tumor_counts.append(np.sum(slice_data > 0))
-                
-                tumor_counts = np.array(tumor_counts)
-                tumor_indices = np.where(tumor_counts > 0)[0].tolist()
-                
-                if not tumor_indices:
-                    best_idx = n_slices // 2
-                    tumor_indices = [best_idx]
-                else:
-                    best_idx = int(np.argmax(tumor_counts))
-                
-                self.patient_cache[pid] = {
-                    'tumor_indices': tumor_indices,
-                    'best_idx': best_idx
-                }
-                self.valid_patient_ids.append(pid)
-                
-                if config.USE_PROXY_CACHE:
-                    self.proxy_cache[pid] = {'seg': mask_proxy.dataobj}
-                    for mod in modalities:
-                        self.proxy_cache[pid][mod] = nib.load(str(p_path / f"{pid}_{mod}.nii.gz")).dataobj
-                
-            except Exception as e:
-                skipped_patients.append((pid, [f"Error reading: {str(e)}"]))
-
-        if skipped_patients:
-            config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            with open(config.SKIPPED_LOG, 'w') as f:
-                for pid, files in skipped_patients:
-                    f.write(f"{pid}: Missing {', '.join(files)}\n")
-            
-            print(f"⚠️  Skipped {len(skipped_patients)} patients. Full list in {config.SKIPPED_LOG}")
-        
-        print(f"✅ Dataset ready: {len(self.valid_patient_ids)} valid patients.")
-
-    def get_cache(self) -> Dict:
-        """
-        獲取當前 Dataset 的快取，以便共享 (v2.6)
-        """
-        return {
-            'valid_patient_ids': self.valid_patient_ids,
-            'patient_cache': self.patient_cache,
-            'proxy_cache': self.proxy_cache
-        }
-
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.valid_patient_ids)
 
-    def _normalize_image(self, img: np.ndarray) -> np.ndarray:
-        p1, p99 = np.percentile(img, (1, 99))
-        img_clipped = np.clip(img, p1, p99)
-        mean, std = np.mean(img_clipped), np.std(img_clipped)
-        return (img_clipped - mean) / (std + 1e-8)
-
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx):
         pid = self.valid_patient_ids[idx]
         cache = self.patient_cache[pid]
         
+        # 選擇切片
         if self.mode == 'train':
-            slice_idx = np.random.choice(cache['tumor_indices'])
+            # 訓練集：從含腫瘤切片中隨機抽樣
+            slice_idx = int(np.random.choice(cache['tumor_slice_indices']))
         else:
-            slice_idx = cache['best_idx']
-        
-        modalities = ['flair', 't1', 't1ce', 't2']
+            # 驗證集：固定使用腫瘤最多的切片
+            slice_idx = cache['val_best_slice_idx']
+            
+        # 讀取影像與標籤
         images = []
+        modalities = ['flair', 't1', 't1ce', 't2']
         
         for mod in modalities:
-            if config.USE_PROXY_CACHE:
-                img_slice = np.array(self.proxy_cache[pid][mod][:, :, slice_idx])
+            if config.USE_PROXY_CACHE and pid in self.proxy_cache:
+                proxy = self.proxy_cache[pid][mod]
             else:
-                img_path = self.data_dir / pid / f"{pid}_{mod}.nii.gz"
-                img_proxy = nib.load(str(img_path))
-                img_slice = np.array(img_proxy.dataobj[:, :, slice_idx])
-                
-            img_slice = self._normalize_image(img_slice)
-            img_slice = resize(img_slice, (self.image_size, self.image_size), order=1, anti_aliasing=True, preserve_range=True)
+                proxy = nib.load(cache['files'][mod])
+            
+            # 僅載入需要的 slice
+            img_slice = np.asarray(proxy.dataobj[:, :, slice_idx])
+            img_slice = self._normalize(img_slice)
             images.append(img_slice)
             
-        image = np.stack(images, axis=0)
-        
-        if config.USE_PROXY_CACHE:
-            mask_slice = np.array(self.proxy_cache[pid]['seg'][:, :, slice_idx])
+        # 讀取標籤
+        if config.USE_PROXY_CACHE and pid in self.proxy_cache:
+            seg_proxy = self.proxy_cache[pid]['seg']
         else:
-            mask_path = self.data_dir / pid / f"{pid}_seg.nii.gz"
-            mask_proxy = nib.load(str(mask_path))
-            mask_slice = np.array(mask_proxy.dataobj[:, :, slice_idx])
+            seg_proxy = nib.load(cache['files']['seg'])
             
-        mask = resize(mask_slice, (self.image_size, self.image_size), order=0, anti_aliasing=False, preserve_range=True)
-        mask = (mask > 0).astype(np.float32)
+        mask_slice = np.asarray(seg_proxy.dataobj[:, :, slice_idx])
+        # Whole Tumor (WT) 二元分割
+        mask_slice = (mask_slice > 0).astype(np.float32)
         
-        if self.transform:
-            image_hwc = np.transpose(image, (1, 2, 0))
-            augmented = self.transform(image=image_hwc, mask=mask)
-            image = np.transpose(augmented['image'], (2, 0, 1))
-            mask = augmented['mask']
+        # Resize
+        from skimage.transform import resize
+        images = [resize(img, (self.image_size, self.image_size), order=1, preserve_range=True, anti_aliasing=True) for img in images]
+        mask_slice = resize(mask_slice, (self.image_size, self.image_size), order=0, preserve_range=True, anti_aliasing=False)
         
-        return torch.from_numpy(image).float(), torch.from_numpy(mask).float().unsqueeze(0)
+        # 轉換為 Tensor (C, H, W)
+        image_tensor = torch.from_numpy(np.stack(images, axis=0)).float()
+        mask_tensor = torch.from_numpy(mask_slice).unsqueeze(0).float()
+        
+        return image_tensor, mask_tensor
+
+    def _normalize(self, img):
+        """
+        Percentile clip + Z-score normalization
+        """
+        p1, p99 = np.percentile(img, [1, 99])
+        img = np.clip(img, p1, p99)
+        mean = np.mean(img)
+        std = np.std(img)
+        return (img - mean) / (std + 1e-8)
+import torch

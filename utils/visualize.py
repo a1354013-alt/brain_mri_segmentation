@@ -1,5 +1,5 @@
 """
-Visualization utilities with Alpha Blending and MC Dropout (v2.5)
+Visualization utilities with Alpha Blending and MC Dropout (v2.7)
 """
 import matplotlib.pyplot as plt
 import torch
@@ -12,7 +12,7 @@ import config
 
 def enable_dropout(model: nn.Module) -> None:
     """
-    只將 nn.Dropout 與 nn.Dropout2d 設為 train 模式
+    只將 nn.Dropout 與 nn.Dropout2d 設為 train 模式 (v2.7)
     """
     for module in model.modules():
         if isinstance(module, (nn.Dropout, nn.Dropout2d)):
@@ -27,7 +27,7 @@ def mc_dropout_inference(
     method: str = 'var'
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    MC Dropout 推論
+    MC Dropout 推論 (v2.7)
     """
     model.eval()
     enable_dropout(model)
@@ -62,6 +62,9 @@ def plot_results_with_uncertainty(
     save_path: Optional[Path] = None,
     title: str = "Brain MRI Tumor Segmentation"
 ) -> None:
+    """
+    視覺化結果：原圖、GT、預測、不確定性、疊加圖 (v2.7)
+    """
     fig, axes = plt.subplots(1, 5, figsize=(25, 5))
     
     axes[0].imshow(image[0], cmap='gray'); axes[0].set_title("MRI (FLAIR)"); axes[0].axis('off')
@@ -72,7 +75,7 @@ def plot_results_with_uncertainty(
     axes[3].set_title("Uncertainty Map"); axes[3].axis('off')
     plt.colorbar(im, ax=axes[3], fraction=0.046, pad=0.04)
     
-    # Overlay (v2.5 Alpha Blending)
+    # Overlay (v2.7 Alpha Blending)
     img_norm = (image[0] - image[0].min()) / (image[0].max() - image[0].min() + 1e-8)
     overlay = np.stack([img_norm]*3, axis=-1)
     

@@ -1,5 +1,5 @@
 """
-Configuration file for Brain MRI Segmentation Project (v2.6 Final Gold Master)
+Brain MRI Segmentation Project Version: v2.7 Final Gold Master Corrected
 """
 import torch
 import random
@@ -22,6 +22,8 @@ SKIPPED_LOG = OUTPUT_DIR / "skipped_patients.txt"
 DEMO_OUTPUT_DIR = OUTPUT_DIR / "demo"
 DEMO_CHECKPOINT_PATH = DEMO_OUTPUT_DIR / "best_checkpoint_demo.pth"
 DEMO_MODEL_STATE_PATH = DEMO_OUTPUT_DIR / "best_model_state_demo.pth"
+DEMO_LAST_CHECKPOINT_PATH = DEMO_OUTPUT_DIR / "last_checkpoint_demo.pth"
+DEMO_LAST_MODEL_STATE_PATH = DEMO_OUTPUT_DIR / "last_model_state_demo.pth"
 DEMO_TENSORBOARD_DIR = DEMO_OUTPUT_DIR / "tensorboard"
 DEMO_LOG_FILE = DEMO_OUTPUT_DIR / "training_log_demo.csv"
 

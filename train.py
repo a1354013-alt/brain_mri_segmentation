@@ -1,17 +1,16 @@
 """
-Training module with robust path handling and last checkpoint saving (v2.6)
+Training module with unified path handling and last checkpoint saving (v2.7 Final)
 """
 import csv
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import Tuple, Dict, List, Optional
+from typing import Tuple
 import config
 
 
@@ -41,12 +40,14 @@ class Trainer:
     def __init__(
         self, 
         model: nn.Module, 
-        train_loader: DataLoader, 
-        val_loader: DataLoader,
+        train_loader: torch.utils.data.DataLoader, 
+        val_loader: torch.utils.data.DataLoader,
         device: torch.device,
         output_dir: Path,
         checkpoint_path: Path,
         model_state_path: Path,
+        last_checkpoint_path: Path,
+        last_model_state_path: Path,
         log_file: Path,
         tensorboard_dir: Path,
         use_amp: bool = True,
@@ -59,6 +60,8 @@ class Trainer:
         self.output_dir = output_dir
         self.checkpoint_path = checkpoint_path
         self.model_state_path = model_state_path
+        self.last_checkpoint_path = last_checkpoint_path
+        self.last_model_state_path = last_model_state_path
         self.log_file = log_file
         self.total_epochs = total_epochs
         
@@ -76,7 +79,6 @@ class Trainer:
     def train_epoch(self, epoch: int) -> float:
         self.model.train()
         total_loss = 0.0
-        # v2.6 修正進度條顯示
         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.total_epochs} [Train]")
         for images, masks in pbar:
             images, masks = images.to(self.device), masks.to(self.device)
@@ -131,11 +133,9 @@ class Trainer:
             torch.save(self.model.state_dict(), self.model_state_path)
             print(f"⭐ Best model saved (Dice: {dice:.4f})")
         else:
-            # v2.6 儲存最後一份保險
-            last_cp = self.output_dir / "last_checkpoint.pth"
-            last_ms = self.output_dir / "last_model_state.pth"
-            torch.save(checkpoint, last_cp)
-            torch.save(self.model.state_dict(), last_ms)
+            # v2.7 Final 使用傳入的路徑
+            torch.save(checkpoint, self.last_checkpoint_path)
+            torch.save(self.model.state_dict(), self.last_model_state_path)
     
     def train(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
