@@ -1,5 +1,5 @@
 """
-Training module with unified path handling and last checkpoint saving (v2.9 Final Gold Master Corrected)
+Training module with unified path handling and last checkpoint saving (v3.0 Final Release Gold Master)
 """
 import csv
 import torch
@@ -105,6 +105,9 @@ class Trainer:
         return total_loss / len(self.train_loader)
     
     def validate(self, epoch: int) -> Tuple[float, float]:
+        if self.val_loader is None:
+            return 0.0, 0.0
+            
         self.model.eval()
         val_loss, val_dice = 0.0, 0.0
         pbar = tqdm(self.val_loader, desc=f"Epoch {epoch+1}/{self.total_epochs} [Val]")
@@ -135,7 +138,7 @@ class Trainer:
             torch.save(self.model.state_dict(), self.model_state_path)
             print(f"⭐ Best model saved (Dice: {dice:.4f})")
         else:
-            # v2.9 Final 使用傳入的路徑
+            # v3.0 Final 使用傳入的路徑
             torch.save(checkpoint, self.last_checkpoint_path)
             torch.save(self.model.state_dict(), self.last_model_state_path)
     
@@ -144,7 +147,9 @@ class Trainer:
         for epoch in range(self.total_epochs):
             train_loss = self.train_epoch(epoch)
             val_loss, val_dice = self.validate(epoch)
-            self.scheduler.step(val_dice)
+            
+            if self.val_loader is not None:
+                self.scheduler.step(val_dice)
             
             lr = self.optimizer.param_groups[0]['lr']
             self.history['train_loss'].append(train_loss)
@@ -153,8 +158,9 @@ class Trainer:
             self.history['lr'].append(lr)
             
             self.writer.add_scalar('Loss/train', train_loss, epoch)
-            self.writer.add_scalar('Loss/val', val_loss, epoch)
-            self.writer.add_scalar('Dice/val', val_dice, epoch)
+            if self.val_loader is not None:
+                self.writer.add_scalar('Loss/val', val_loss, epoch)
+                self.writer.add_scalar('Dice/val', val_dice, epoch)
             
             print(f"Epoch {epoch+1}: Loss={train_loss:.4f}, Val Dice={val_dice:.4f}, LR={lr:.6f}")
             
@@ -180,15 +186,17 @@ class Trainer:
     def plot_curves(self) -> None:
         fig, axes = plt.subplots(1, 2, figsize=(15, 5))
         axes[0].plot(self.history['train_loss'], label='Train')
-        axes[0].plot(self.history['val_loss'], label='Val')
+        if self.val_loader is not None:
+            axes[0].plot(self.history['val_loss'], label='Val')
         axes[0].set_title('Loss')
         axes[0].set_xlabel('Epoch')
         axes[0].legend()
         
-        axes[1].plot(self.history['val_dice'], label='Val Dice', color='green')
-        axes[1].set_title('Dice Score')
-        axes[1].set_xlabel('Epoch')
-        axes[1].legend()
+        if self.val_loader is not None:
+            axes[1].plot(self.history['val_dice'], label='Val Dice', color='green')
+            axes[1].set_title('Dice Score')
+            axes[1].set_xlabel('Epoch')
+            axes[1].legend()
         
         plt.tight_layout()
         plt.savefig(self.output_dir / "loss_curve.png", dpi=150, bbox_inches='tight')

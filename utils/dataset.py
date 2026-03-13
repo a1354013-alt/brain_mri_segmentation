@@ -1,5 +1,5 @@
 """
-BraTS Dataset with extreme memory optimization, shared cache subsetting, and robust error handling (v3.0 Final Release)
+BraTS Dataset with extreme memory optimization, shared cache subsetting, and robust error handling (v3.0 Final Release Gold Master)
 """
 import nibabel as nib
 import numpy as np
