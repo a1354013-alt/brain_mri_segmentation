@@ -1,5 +1,5 @@
 """
-Brain MRI Segmentation Project Version: v2.9 Final Gold Master Corrected
+Brain MRI Segmentation Project Version: v3.0 Final Release Gold Master
 """
 import torch
 import random
@@ -59,7 +59,7 @@ RANDOM_SEED = 42
 
 def set_seed(seed: int = RANDOM_SEED) -> None:
     """
-    固定所有隨機種子以確保可重現性 (v2.9 Final)
+    固定所有隨機種子以確保可重現性 (v3.0 Final)
     """
     random.seed(seed)
     np.random.seed(seed)
