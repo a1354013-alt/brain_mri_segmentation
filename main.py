@@ -1,5 +1,5 @@
 """
-Main CLI for Brain MRI Segmentation Project (v2.8 Final Gold Master Corrected)
+Main CLI for Brain MRI Segmentation Project (v2.9 Final Gold Master Corrected)
 """
 import argparse
 import torch
@@ -16,7 +16,7 @@ from train import Trainer
 
 def worker_init_fn(worker_id):
     """
-    修正多 worker RNG 問題 (v2.8 Final)
+    修正多 worker RNG 問題 (v2.9 Final)
     """
     seed = config.RANDOM_SEED + worker_id
     np.random.seed(seed)
@@ -32,7 +32,7 @@ def get_patient_ids(data_dir: Path) -> list:
 
 
 def train_command(args):
-    print("\n🚀 Training Mode (v2.8 Final)")
+    print("\n🚀 Training Mode (v2.9 Final)")
     config.set_seed()
     
     patient_ids = get_patient_ids(config.DATA_DIR)
@@ -51,7 +51,7 @@ def train_command(args):
     print(f"🔍 Train PIDs (first 3): {train_ids[:3]}")
     print(f"🔍 Val PIDs (first 3): {val_ids[:3]}")
     
-    # v2.8 Final 實作快取共享子集化，並傳入對應的 output_dir
+    # v2.9 Final 實作快取共享子集化，並傳入對應的 output_dir
     train_dataset = BraTSDataset(
         config.DATA_DIR, 
         train_ids, 
@@ -97,7 +97,7 @@ def train_command(args):
 
 
 def infer_command(args):
-    print("\n🔍 Inference Mode (v2.8 Final)")
+    print("\n🔍 Inference Mode (v2.9 Final)")
     
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
     
@@ -119,7 +119,7 @@ def infer_command(args):
     target_patient = args.patient_id
     dataset = None
     
-    # v2.8 Final 輕量化驗證邏輯
+    # v2.9 Final 輕量化驗證邏輯
     if target_patient:
         if BraTSDataset.quick_validate_patient(config.DATA_DIR, target_patient):
             dataset = BraTSDataset(config.DATA_DIR, [target_patient], config.IMAGE_SIZE, mode='val', output_dir=config.OUTPUT_DIR)
@@ -151,7 +151,7 @@ def infer_command(args):
 
 
 def demo_command(args):
-    print("\n🎯 Demo Mode (v2.8 Final)")
+    print("\n🎯 Demo Mode (v2.9 Final)")
     config.set_seed()
     
     patient_ids = get_patient_ids(config.DATA_DIR)
@@ -202,7 +202,7 @@ def demo_command(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Brain MRI Segmentation (v2.8 Final)')
+    parser = argparse.ArgumentParser(description='Brain MRI Segmentation (v2.9 Final)')
     subparsers = parser.add_subparsers(dest='command')
     
     subparsers.add_parser('train')

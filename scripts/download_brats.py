@@ -1,5 +1,5 @@
 """
-BraTS Dataset Download Helper Script with Robust Error Handling (v2.7 Final Gold Master Corrected)
+BraTS Dataset Download Helper Script with Robust Error Handling (v2.9 Final Gold Master Corrected)
 """
 import argparse
 import zipfile
@@ -10,13 +10,13 @@ from typing import Tuple, Optional
 
 def is_patient_folder_complete(folder_path: Path) -> Tuple[bool, Optional[str]]:
     """
-    統一完整性檢查邏輯：必須包含 4 模態 + Seg (v2.7 Final)
+    統一完整性檢查邏輯：必須包含 4 模態 + Seg (v2.9 Final)
     """
     flair_files = list(folder_path.glob("*_flair.nii.gz"))
     if not flair_files:
         return False, None
     
-    # v2.7 Final: 處理多個 flair 檔案的極端情況，優先選擇完整組合
+    # v2.9 Final: 處理多個 flair 檔案的極端情況，優先選擇完整組合
     best_pid = None
     for f in flair_files:
         pid = f.name.replace('_flair.nii.gz', '')
@@ -37,7 +37,7 @@ def is_patient_folder_complete(folder_path: Path) -> Tuple[bool, Optional[str]]:
 
 def validate_and_align_structure(base_dir: Path) -> bool:
     """
-    驗證並自動對齊資料結構 (v2.7 Final)：
+    驗證並自動對齊資料結構 (v2.9 Final)：
     1. 解決搬移撞名問題：若目標已存在則追加後綴。
     2. 解決重複計數問題：使用 seen_dirs 記錄。
     3. 錯誤拋出：若未找到任何資料則拋出 RuntimeError。
@@ -62,7 +62,7 @@ def validate_and_align_structure(base_dir: Path) -> bool:
             seen_dirs.add(p_dir)
             if p_dir.parent != base_dir:
                 target_dir = base_dir / pid
-                # v2.7 Final 處理搬移衝突
+                # v2.9 Final 處理搬移衝突
                 counter = 1
                 while target_dir.exists():
                     target_dir = base_dir / f"{pid}_{counter}"
@@ -99,7 +99,7 @@ def check_data_exists(data_dir: Path) -> bool:
 
 def print_download_instructions():
     print("\n" + "="*70)
-    print("📦 BraTS Dataset Download Instructions (v2.7 Final)")
+    print("📦 BraTS Dataset Download Instructions (v2.9 Final)")
     print("="*70 + "\n")
     print("方法 1: 官方網站下載 (https://www.med.upenn.edu/cbica/brats2020/data.html)")
     print("方法 2: Kaggle API 下載 (kaggle datasets download -d awsaf49/brats20-dataset-training-validation)")
@@ -109,7 +109,7 @@ def print_download_instructions():
 
 
 def auto_download_kaggle(data_dir: Path):
-    print("\n🚀 Starting automatic download via Kaggle API (v2.7 Final)...\n")
+    print("\n🚀 Starting automatic download via Kaggle API (v2.9 Final)...\n")
     try:
         import kaggle
     except ImportError:
@@ -121,7 +121,7 @@ def auto_download_kaggle(data_dir: Path):
     try:
         kaggle.api.dataset_download_files("awsaf49/brats20-dataset-training-validation", path=str(data_dir.parent), unzip=False)
         
-        # v2.7 Final 偵測最新下載的 zip 檔案
+        # v2.9 Final 偵測最新下載的 zip 檔案
         zip_files = sorted(list(data_dir.parent.glob("*.zip")), key=lambda x: x.stat().st_mtime, reverse=True)
         if not zip_files:
             print("❌ Error: No zip file found after download.")
@@ -143,7 +143,7 @@ def auto_download_kaggle(data_dir: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='BraTS Dataset Download Helper (v2.7 Final)')
+    parser = argparse.ArgumentParser(description='BraTS Dataset Download Helper (v2.9 Final)')
     parser.add_argument('--auto', action='store_true', help='Automatically download via Kaggle API')
     parser.add_argument('--data_dir', type=str, default='data/Brats', help='Data directory')
     

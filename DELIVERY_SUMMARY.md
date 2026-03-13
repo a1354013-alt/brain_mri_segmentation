@@ -1,17 +1,17 @@
-# 📦 專案交付摘要 (v2.8 Final Gold Master Corrected)
+# 📦 專案交付摘要 (v2.9 Final Gold Master Corrected)
 
 ## 📋 專案資訊
 
 - **專案名稱**：Brain MRI Tumor Segmentation with Attention U-Net
-- **版本**：v2.8 Final Gold Master Corrected
-- **交付日期**：2026-03-02
+- **版本**：v2.9 Final Gold Master Corrected
+- **交付日期**：2026-03-03
 - **核心框架**：PyTorch, Nibabel, Scikit-Image, Matplotlib
 
 ---
 
-## ✅ 核心改進 (v2.8 Final)
+## ✅ 核心改進 (v2.9 Final)
 
-本專案已完成所有要求的規格，並在 `v2.8` 版本中進行了最後的品質強化：
+本專案已完成所有要求的規格，並在 `v2.9` 版本中進行了最後的品質強化：
 
 ### 1. 極致記憶體優化 (Extreme Memory Optimization) ✓
 - **問題**：原先版本在掃描資料集時會將整個 3D Volume 載入記憶體，造成 RAM 壓力。
@@ -21,11 +21,12 @@
 - **問題**：原先版本在共享快取時存在 KeyError 風險。
 - **解決方案**：強化了快取共享邏輯，加入 PID 存在性檢查與防呆機制，確保訓練集與驗證集在共享快取時能真正分離且不崩潰。
 
-### 3. 日誌路徑優化 ✓
-- **改進**：Dataset 的缺失日誌現在會根據執行模式（Demo 或正式訓練）自動寫入對應的輸出資料夾，避免日誌混淆。
+### 3. Proxy Cache 安全性隱患修復 ✓
+- **問題**：`proxy_cache` 可能因快取資料缺失而塞入 `None`，導致推論時發生 `TypeError`。
+- **解決方案**：在 `dataset.py` 中加入了嚴格的 `None` 檢查，確保僅在快取資料完整時才啟用 Proxy 模式，否則自動回退至穩定讀檔模式。
 
 ### 4. 版本標示全面同步 ✓
-- **一致性**：全專案（含 `config.py`, `attention_unet.py`, `main.py`, `README.md`）的版本標示已統一更新為 **v2.8 Final**。
+- **一致性**：全專案（含 `config.py`, `attention_unet.py`, `main.py`, `README.md`, `train.py`, `visualize.py`, `download_brats.py`）的版本標示已統一更新為 **v2.9 Final**。
 
 ### 5. 程式碼清理 ✓
 - **專業度**：移除了所有模組中殘留的未使用 `import` 語句（如 `DataLoader`, `Dict`, `List` 等）。
@@ -75,4 +76,4 @@ python main.py demo
 
 ## 🎉 總結
 
-本專案已完成所有要求的規格，並在 `v2.8` 中解決了最後的效能與穩定性隱患。所有檔案完整、可運行、無省略，具備工業級穩健性。
+本專案已完成所有要求的規格，並在 `v2.9` 中解決了最後的效能與穩定性隱患。所有檔案完整、可運行、無省略，具備工業級穩健性。

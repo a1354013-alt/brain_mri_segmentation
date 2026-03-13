@@ -1,5 +1,5 @@
 """
-Training module with unified path handling and last checkpoint saving (v2.7 Final)
+Training module with unified path handling and last checkpoint saving (v2.9 Final Gold Master Corrected)
 """
 import csv
 import torch
@@ -104,17 +104,19 @@ class Trainer:
             pbar.set_postfix({'loss': f'{loss.item():.4f}'})
         return total_loss / len(self.train_loader)
     
-    def validate(self) -> Tuple[float, float]:
+    def validate(self, epoch: int) -> Tuple[float, float]:
         self.model.eval()
         val_loss, val_dice = 0.0, 0.0
+        pbar = tqdm(self.val_loader, desc=f"Epoch {epoch+1}/{self.total_epochs} [Val]")
         with torch.no_grad():
-            for images, masks in self.val_loader:
+            for images, masks in pbar:
                 images, masks = images.to(self.device), masks.to(self.device)
                 outputs = self.model(images)
                 val_loss += self.criterion(outputs, masks).item()
                 
                 preds = (torch.sigmoid(outputs) > config.THRESHOLD).float()
                 val_dice += dice_coeff(preds, masks).item()
+                pbar.set_postfix({'dice': f'{val_dice/len(self.val_loader):.4f}'})
         return val_loss / len(self.val_loader), val_dice / len(self.val_loader)
     
     def save_checkpoints(self, epoch: int, dice: float, is_best: bool = True) -> None:
@@ -133,7 +135,7 @@ class Trainer:
             torch.save(self.model.state_dict(), self.model_state_path)
             print(f"⭐ Best model saved (Dice: {dice:.4f})")
         else:
-            # v2.7 Final 使用傳入的路徑
+            # v2.9 Final 使用傳入的路徑
             torch.save(checkpoint, self.last_checkpoint_path)
             torch.save(self.model.state_dict(), self.last_model_state_path)
     
@@ -141,7 +143,7 @@ class Trainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         for epoch in range(self.total_epochs):
             train_loss = self.train_epoch(epoch)
-            val_loss, val_dice = self.validate()
+            val_loss, val_dice = self.validate(epoch)
             self.scheduler.step(val_dice)
             
             lr = self.optimizer.param_groups[0]['lr']
