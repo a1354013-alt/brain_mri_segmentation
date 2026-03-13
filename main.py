@@ -1,5 +1,5 @@
 """
-Main CLI for Brain MRI Segmentation Project (v2.7 Final Gold Master Corrected)
+Main CLI for Brain MRI Segmentation Project (v2.8 Final Gold Master Corrected)
 """
 import argparse
 import torch
@@ -16,7 +16,7 @@ from train import Trainer
 
 def worker_init_fn(worker_id):
     """
-    修正多 worker RNG 問題 (v2.7 Final)
+    修正多 worker RNG 問題 (v2.8 Final)
     """
     seed = config.RANDOM_SEED + worker_id
     np.random.seed(seed)
@@ -32,7 +32,7 @@ def get_patient_ids(data_dir: Path) -> list:
 
 
 def train_command(args):
-    print("\n🚀 Training Mode")
+    print("\n🚀 Training Mode (v2.8 Final)")
     config.set_seed()
     
     patient_ids = get_patient_ids(config.DATA_DIR)
@@ -51,12 +51,25 @@ def train_command(args):
     print(f"🔍 Train PIDs (first 3): {train_ids[:3]}")
     print(f"🔍 Val PIDs (first 3): {val_ids[:3]}")
     
-    # v2.7 Final 實作快取共享子集化
-    train_dataset = BraTSDataset(config.DATA_DIR, train_ids, config.IMAGE_SIZE, mode='train')
+    # v2.8 Final 實作快取共享子集化，並傳入對應的 output_dir
+    train_dataset = BraTSDataset(
+        config.DATA_DIR, 
+        train_ids, 
+        config.IMAGE_SIZE, 
+        mode='train',
+        output_dir=config.OUTPUT_DIR
+    )
     shared_cache = train_dataset.get_cache()
     
     # 驗證集使用共享快取，但僅提取 val_ids 對應的子集
-    val_dataset = BraTSDataset(config.DATA_DIR, val_ids, config.IMAGE_SIZE, mode='val', prepared_cache=shared_cache)
+    val_dataset = BraTSDataset(
+        config.DATA_DIR, 
+        val_ids, 
+        config.IMAGE_SIZE, 
+        mode='val', 
+        prepared_cache=shared_cache,
+        output_dir=config.OUTPUT_DIR
+    )
     
     train_loader = DataLoader(
         train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, 
@@ -84,7 +97,7 @@ def train_command(args):
 
 
 def infer_command(args):
-    print("\n🔍 Inference Mode")
+    print("\n🔍 Inference Mode (v2.8 Final)")
     
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
     
@@ -96,8 +109,7 @@ def infer_command(args):
         model.load_state_dict(checkpoint['model_state_dict'])
         print(f"✓ Loaded model state from checkpoint {config.CHECKPOINT_PATH}")
     else:
-        print("❌ Error: No model found. Please train first.")
-        return
+        print("⚠️ Warning: No model found. Using random weights.")
 
     patient_ids = get_patient_ids(config.DATA_DIR)
     if len(patient_ids) == 0:
@@ -107,19 +119,19 @@ def infer_command(args):
     target_patient = args.patient_id
     dataset = None
     
-    # v2.7 Final 輕量化驗證邏輯
+    # v2.8 Final 輕量化驗證邏輯
     if target_patient:
         if BraTSDataset.quick_validate_patient(config.DATA_DIR, target_patient):
-            dataset = BraTSDataset(config.DATA_DIR, [target_patient], config.IMAGE_SIZE, mode='val')
+            dataset = BraTSDataset(config.DATA_DIR, [target_patient], config.IMAGE_SIZE, mode='val', output_dir=config.OUTPUT_DIR)
         else:
-            print(f"⚠️  Patient {target_patient} is invalid. Searching for the first valid patient...")
+            print(f"⚠️ Patient {target_patient} is invalid. Searching for the first valid patient...")
             target_patient = None
             
     if target_patient is None:
         for pid in patient_ids:
             if BraTSDataset.quick_validate_patient(config.DATA_DIR, pid):
                 target_patient = pid
-                dataset = BraTSDataset(config.DATA_DIR, [pid], config.IMAGE_SIZE, mode='val')
+                dataset = BraTSDataset(config.DATA_DIR, [pid], config.IMAGE_SIZE, mode='val', output_dir=config.OUTPUT_DIR)
                 print(f"💡 Automatically selected valid patient: {target_patient}")
                 break
     
@@ -139,7 +151,7 @@ def infer_command(args):
 
 
 def demo_command(args):
-    print("\n🎯 Demo Mode")
+    print("\n🎯 Demo Mode (v2.8 Final)")
     config.set_seed()
     
     patient_ids = get_patient_ids(config.DATA_DIR)
@@ -158,7 +170,14 @@ def demo_command(args):
         print("❌ No valid patients found for Demo.")
         return
     
-    train_dataset = BraTSDataset(config.DATA_DIR, demo_ids, config.IMAGE_SIZE, mode='train')
+    # Demo 模式使用專屬的 DEMO_OUTPUT_DIR
+    train_dataset = BraTSDataset(
+        config.DATA_DIR, 
+        demo_ids, 
+        config.IMAGE_SIZE, 
+        mode='train',
+        output_dir=config.DEMO_OUTPUT_DIR
+    )
     train_loader = DataLoader(train_dataset, batch_size=1, num_workers=0, worker_init_fn=worker_init_fn)
     
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
@@ -183,7 +202,7 @@ def demo_command(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Brain MRI Segmentation')
+    parser = argparse.ArgumentParser(description='Brain MRI Segmentation (v2.8 Final)')
     subparsers = parser.add_subparsers(dest='command')
     
     subparsers.add_parser('train')
