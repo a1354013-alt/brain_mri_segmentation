@@ -1,10 +1,19 @@
-# Brain MRI Tumor Segmentation (v3.0 Final Release Gold Master)
+# Brain MRI Tumor Segmentation (Attention U-Net)
+# v3.1 Final Release
 
 基於 **Attention U-Net** 的腦部 MRI 腫瘤分割專案，支援不確定性估計、極致記憶體優化與工業級魯棒性的資料處理流程。
 
 ---
 
-## 📋 專案更新亮點 (v3.0 Final)
+## 📋 專案更新亮點
+
+v3.1
+- 修正 smoke_test import 順序問題
+- 改善 prepared_cache missing log 檔名策略
+- validation progress bar dice 顯示修正
+- 全專案版本標示同步
+
+v3.0
 
 - **v3.0: 效能與穩定性打磨**：移出了 Hot Path 中的 `skimage.transform.resize` import，強化了 `prepared_cache` 的錯誤處理（改為 `raise ValueError`），並新增了核心流程的 **冒煙測試 (Smoke Test)**。
 - **v2.9: Proxy Cache 安全性修復**：修復了 `proxy_cache` 可能因快取資料缺失而塞入 `None` 導致推論崩潰的隱患。
@@ -58,16 +67,16 @@ python main.py demo
 ## 📁 專案結構
 ```
 brain_mri_segmentation/
-├── config.py              # 核心配置 (v3.0 Final)
+├── config.py              # 核心配置
 ├── main.py                # CLI 入口 (含快取共享子集化)
 ├── train.py               # 訓練邏輯 (Last Checkpoint 儲存)
 ├── models/
-│   └── attention_unet.py  # 具備斷言保護的模型 (v3.0)
+│   └── attention_unet.py  # 具備斷言保護的模型
 ├── utils/
 │   ├── dataset.py         # 極致記憶體優化與防呆實作
 │   └── visualize.py       # Alpha Blending 視覺化
 ├── scripts/
 │   └── download_brats.py  # 強化版下載與衝突處理腳本
 └── tests/
-    └── smoke_test.py      # 核心流程冒煙測試 (v3.0)
+    └── smoke_test.py      # 核心流程冒煙測試
 ```

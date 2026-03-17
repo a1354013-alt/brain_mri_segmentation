@@ -16,7 +16,7 @@ from train import Trainer
 from utils import BraTSDataset, mc_dropout_inference, plot_results_with_uncertainty
 
 
-def worker_init_fn(worker_id):
+def worker_init_fn(worker_id: int) -> None:
     """
     修正多 worker RNG 問題 (v3.1 Final)
     """
@@ -26,7 +26,7 @@ def worker_init_fn(worker_id):
     torch.manual_seed(seed)
 
 
-def get_patient_ids(data_dir: Path) -> list:
+def get_patient_ids(data_dir: Path) -> list[str]:
     if not data_dir.exists():
         print(f"❌ Error: Data directory not found at {data_dir}")
         return []

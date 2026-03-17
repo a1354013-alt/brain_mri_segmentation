@@ -3,6 +3,14 @@ Smoke Test for Brain MRI Segmentation Project (v3.1 Final Release Gold Master)
 Ensures core components (Dataset, Model, Inference) are working correctly.
 """
 
+try:
+    import nibabel
+except ImportError:
+    print("Missing dependency: nibabel")
+    print("Please install project dependencies first:")
+    print("pip install -r requirements.txt")
+    raise
+
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -10,12 +18,13 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import torch
 
-from models import AttentionUNet
-from utils import BraTSDataset, mc_dropout_inference
-
-# Add project root to path
+# Add project root to path FIRST
 project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
+
+# Now import local modules that depend on sys.path
+from models import AttentionUNet
+from utils import BraTSDataset, mc_dropout_inference
 
 
 def run_smoke_test():

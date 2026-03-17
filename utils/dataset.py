@@ -36,20 +36,20 @@ class BraTSDataset(Dataset):
         self.proxy_cache = {}
 
         if prepared_cache:
-            # v3.0 Final: 強化快取共享子集化邏輯，確保安全性與分離
+            # 強化快取共享子集化邏輯，確保安全性與分離
             cache_valid = prepared_cache.get("valid_patient_ids", [])
             cache_data = prepared_cache.get("patient_cache", {})
             cache_proxy = prepared_cache.get("proxy_cache", {})
 
             missing_in_cache = []
             for pid in patient_ids:
-                # v3.0 Final: 更保守的檢查，避免 KeyError
+                # 更保守的檢查，避免 KeyError
                 data = cache_data.get(pid)
                 if pid in cache_valid and data is not None:
                     self.valid_patient_ids.append(pid)
                     self.patient_cache[pid] = data
 
-                    # v3.0 Final: 只有當 proxy_bundle 不為 None 時才放入，避免 getitem 崩潰
+                    # 只有當 proxy_bundle 不為 None 時才放入，避免 getitem 崩潰
                     if config.USE_PROXY_CACHE:
                         proxy_bundle = cache_proxy.get(pid)
                         if proxy_bundle is not None:
@@ -57,27 +57,29 @@ class BraTSDataset(Dataset):
                 else:
                     missing_in_cache.append(pid)
 
-            # v3.0 Final: 統一輸出快取缺失摘要，並寫入對應的 output_dir
+            # 統一輸出快取缺失摘要，並寫入對應的 output_dir
             if missing_in_cache:
                 n_missing = len(missing_in_cache)
                 print(f"⚠️  Prepared cache missing {n_missing} patients from provided list.")
                 print(f"💡 Showing first 10 missing: {missing_in_cache[:10]}")
 
-                log_path = self.output_dir / "prepared_cache_missing.txt"
+                # This file stores only the latest missing records for the given mode.
+                # It is intentionally overwritten each run to keep logs concise.
+                log_path = self.output_dir / f"prepared_cache_missing_{self.mode}.txt"
                 self.output_dir.mkdir(parents=True, exist_ok=True)
                 with open(log_path, "w") as f:
                     f.write("\n".join(missing_in_cache))
                 print(f"📝 Full missing list saved to {log_path}")
 
             if not self.valid_patient_ids:
-                # v3.0 Final: 改為 raise ValueError 以利 CI/自動化流程抓錯
+                # 改為 raise ValueError 以利 CI/自動化流程抓錯
                 raise ValueError("❌ Error: No valid patients in provided patient_ids after filtering prepared_cache.")
         else:
             self._prepare_dataset()
 
-    def _prepare_dataset(self):
+    def _prepare_dataset(self) -> None:
         """
-        掃描資料夾並預先計算切片索引 (v3.0 Final: 真正逐切片掃描，極致節省記憶體)
+        掃描資料夾並預先計算切片索引 (真正逐切片掃描，極致節省記憶體)
         """
         skipped_patients = []
         print(f"🔍 Scanning {len(self.patient_ids)} patients for {self.mode}...")
@@ -93,7 +95,7 @@ class BraTSDataset(Dataset):
                 continue
 
             try:
-                # v3.0 Final: 真正逐切片掃描，不將整個 3D Volume 載入記憶體
+                # 真正逐切片掃描，不將整個 3D Volume 載入記憶體
                 mask_proxy = nib.load(str(files["seg"]))
                 shape = mask_proxy.header.get_data_shape()
                 n_slices = shape[2]
@@ -119,7 +121,7 @@ class BraTSDataset(Dataset):
                     "val_best_slice_idx": val_best_slice_idx,
                 }
 
-                # v3.0 Final: 若開啟 Proxy 快取，則快取 nibabel 對象以提升 I/O 效能
+                # 若開啟 Proxy 快取，則快取 nibabel 對象以提升 I/O 效能
                 if config.USE_PROXY_CACHE:
                     self.proxy_cache[pid] = {mod: nib.load(str(files[mod])) for mod in modalities}
                     self.proxy_cache[pid]["seg"] = mask_proxy
@@ -145,7 +147,7 @@ class BraTSDataset(Dataset):
     @staticmethod
     def quick_validate_patient(data_dir: Path, pid: str) -> bool:
         """
-        輕量化驗證：僅檢查檔案是否存在 (v3.0 Final)
+        輕量化驗證：僅檢查檔案是否存在
         """
         p_dir = data_dir / pid
         modalities = ["flair", "t1", "t1ce", "t2", "seg"]
@@ -154,10 +156,10 @@ class BraTSDataset(Dataset):
                 return False
         return True
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.valid_patient_ids)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         pid = self.valid_patient_ids[idx]
         cache = self.patient_cache[pid]
 
@@ -170,7 +172,7 @@ class BraTSDataset(Dataset):
         modalities = ["flair", "t1", "t1ce", "t2"]
 
         for mod in modalities:
-            # v3.0 Final: 強化防呆檢查，確保 proxy_cache[pid] 存在且不為 None
+            # 強化防呆檢查，確保 proxy_cache[pid] 存在且不為 None
             if config.USE_PROXY_CACHE and pid in self.proxy_cache and self.proxy_cache[pid] is not None:
                 proxy = self.proxy_cache[pid][mod]
             else:
@@ -188,7 +190,7 @@ class BraTSDataset(Dataset):
         mask_slice = np.asarray(seg_proxy.dataobj[:, :, slice_idx])
         mask_slice = (mask_slice > 0).astype(np.float32)
 
-        # v3.0 Final: resize 已移至頂部 import
+        # resize 已移至頂部 import
         images = [
             resize(img, (self.image_size, self.image_size), order=1, preserve_range=True, anti_aliasing=True)
             for img in images
@@ -202,7 +204,7 @@ class BraTSDataset(Dataset):
 
         return image_tensor, mask_tensor
 
-    def _normalize(self, img):
+    def _normalize(self, img: np.ndarray) -> np.ndarray:
         p1, p99 = np.percentile(img, [1, 99])
         img = np.clip(img, p1, p99)
         mean = np.mean(img)

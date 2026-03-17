@@ -115,14 +115,14 @@ class Trainer:
         val_loss, val_dice = 0.0, 0.0
         pbar = tqdm(self.val_loader, desc=f"Epoch {epoch + 1}/{self.total_epochs} [Val]")
         with torch.no_grad():
-            for images, masks in pbar:
+            for batch_idx, (images, masks) in enumerate(pbar):
                 images, masks = images.to(self.device), masks.to(self.device)
                 outputs = self.model(images)
                 val_loss += self.criterion(outputs, masks).item()
 
                 preds = (torch.sigmoid(outputs) > config.THRESHOLD).float()
                 val_dice += dice_coeff(preds, masks).item()
-                pbar.set_postfix({"dice": f"{val_dice / len(self.val_loader):.4f}"})
+                pbar.set_postfix({"dice": f"{val_dice / (batch_idx + 1):.4f}"})
         return val_loss / len(self.val_loader), val_dice / len(self.val_loader)
 
     def save_checkpoints(self, epoch: int, dice: float, is_best: bool = True) -> None:

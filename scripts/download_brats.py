@@ -1,5 +1,9 @@
-""" ""
-BraTS Dataset Download Helper Script with Robust Error Handling (v3.1 Final Release Gold Master)
+"""
+BraTS Dataset Download Helper Script
+with Robust Error Handling.
+
+Used to automatically detect downloaded BraTS archives
+and reorganize them into the project dataset structure.
 """
 
 import argparse
