@@ -1,6 +1,7 @@
 """
-Attention U-Net implementation with robust input size protection and assertions (v3.0 Final Release Gold Master)
+Attention U-Net implementation with robust input size protection and assertions (v3.1 Final Release Gold Master)
 """
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,7 +17,7 @@ class ConvBlock(nn.Module):
             nn.Dropout2d(p=dropout_p),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
+            nn.ReLU(inplace=True),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -27,17 +28,13 @@ class AttentionGate(nn.Module):
     def __init__(self, F_g: int, F_l: int, F_int: int):
         super().__init__()
         self.W_g = nn.Sequential(
-            nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(F_int)
+            nn.Conv2d(F_g, F_int, kernel_size=1, stride=1, padding=0, bias=True), nn.BatchNorm2d(F_int)
         )
         self.W_x = nn.Sequential(
-            nn.Conv2d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(F_int)
+            nn.Conv2d(F_l, F_int, kernel_size=1, stride=1, padding=0, bias=True), nn.BatchNorm2d(F_int)
         )
         self.psi = nn.Sequential(
-            nn.Conv2d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True),
-            nn.BatchNorm2d(1),
-            nn.Sigmoid()
+            nn.Conv2d(F_int, 1, kernel_size=1, stride=1, padding=0, bias=True), nn.BatchNorm2d(1), nn.Sigmoid()
         )
         self.relu = nn.ReLU(inplace=True)
 
@@ -52,7 +49,7 @@ class AttentionGate(nn.Module):
 class AttentionUNet(nn.Module):
     def __init__(self, n_channels: int = 4, n_classes: int = 1, dropout_p: float = 0.2):
         super().__init__()
-        
+
         # Encoder
         self.conv1 = ConvBlock(n_channels, 64, dropout_p)
         self.maxpool1 = nn.MaxPool2d(kernel_size=2, stride=2)
@@ -62,10 +59,10 @@ class AttentionUNet(nn.Module):
         self.maxpool3 = nn.MaxPool2d(kernel_size=2, stride=2)
         self.conv4 = ConvBlock(256, 512, dropout_p)
         self.maxpool4 = nn.MaxPool2d(kernel_size=2, stride=2)
-        
+
         # Center
         self.center = ConvBlock(512, 1024, dropout_p)
-        
+
         # Decoder
         self.up4 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)
         self.att4 = AttentionGate(F_g=512, F_l=512, F_int=256)
@@ -87,7 +84,7 @@ class AttentionUNet(nn.Module):
 
     def _align_and_concat(self, x_skip: torch.Tensor, x_up: torch.Tensor) -> torch.Tensor:
         """
-        尺寸對齊保護 (v3.0 Final)：
+        尺寸對齊保護 (v3.1 Final)：
         1. 若 x_up 較小 (diff > 0) -> 使用 Padding
         2. 若 x_up 較大 (diff < 0) -> 使用 Center Crop
         3. 最後加入 Assert 保險
@@ -95,26 +92,26 @@ class AttentionUNet(nn.Module):
         if x_skip.shape[2:] != x_up.shape[2:]:
             diff_y = x_skip.size()[2] - x_up.size()[2]
             diff_x = x_skip.size()[3] - x_up.size()[3]
-            
+
             # 處理 Padding (diff > 0)
             pad_y = max(0, diff_y)
             pad_x = max(0, diff_x)
             if pad_y > 0 or pad_x > 0:
-                x_up = F.pad(x_up, [pad_x // 2, pad_x - pad_x // 2,
-                                    pad_y // 2, pad_y - pad_y // 2])
-            
+                x_up = F.pad(x_up, [pad_x // 2, pad_x - pad_x // 2, pad_y // 2, pad_y - pad_y // 2])
+
             # 處理 Crop (diff < 0)
             crop_y = max(0, -diff_y)
             crop_x = max(0, -diff_x)
             if crop_y > 0 or crop_x > 0:
                 y_start = crop_y // 2
                 x_start = crop_x // 2
-                x_up = x_up[:, :, y_start:y_start + x_skip.size()[2], x_start:x_start + x_skip.size()[3]]
-        
-        # v3.0 Final 斷言保護
-        assert x_skip.shape[2:] == x_up.shape[2:], \
+                x_up = x_up[:, :, y_start : y_start + x_skip.size()[2], x_start : x_start + x_skip.size()[3]]
+
+        # v3.1 Final 斷言保護
+        assert x_skip.shape[2:] == x_up.shape[2:], (
             f"Size mismatch after alignment: skip {x_skip.shape[2:]} vs up {x_up.shape[2:]}"
-                
+        )
+
         return torch.cat([x_skip, x_up], dim=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -123,10 +120,10 @@ class AttentionUNet(nn.Module):
         e2 = self.conv2(self.maxpool1(e1))
         e3 = self.conv3(self.maxpool2(e2))
         e4 = self.conv4(self.maxpool3(e3))
-        
+
         # Center
         c = self.center(self.maxpool4(e4))
-        
+
         # Decoder with Attention & Alignment Protection
         d4 = self.up4(c)
         x4 = self.att4(g=d4, x=e4)

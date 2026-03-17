@@ -1,6 +1,7 @@
 """
 Models module
 """
+
 from .attention_unet import AttentionUNet
 
-__all__ = ['AttentionUNet']
+__all__ = ["AttentionUNet"]

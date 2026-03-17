@@ -1,10 +1,12 @@
 """
 Brain MRI Segmentation Project Version: v3.0 Final Release Gold Master
 """
-import torch
+
 import random
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import torch
 
 # ==================== 路徑設定 ====================
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -29,10 +31,10 @@ DEMO_LOG_FILE = DEMO_OUTPUT_DIR / "training_log_demo.csv"
 
 # ==================== 模型參數 ====================
 N_CHANNELS = 4  # FLAIR, T1, T1ce, T2
-N_CLASSES = 1   # Binary segmentation (Whole Tumor)
+N_CLASSES = 1  # Binary segmentation (Whole Tumor)
 DROPOUT_P = 0.2
 THRESHOLD = 0.5
-OVERLAY_ALPHA = 0.35 # 視覺化疊加透明度
+OVERLAY_ALPHA = 0.35  # 視覺化疊加透明度
 
 # ==================== 訓練參數 ====================
 IMAGE_SIZE = 128
@@ -52,10 +54,11 @@ MC_ITERATIONS = 20
 DEMO_MC_ITERATIONS = 5
 
 # ==================== 裝置設定 ====================
-DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ==================== Random Seed ====================
 RANDOM_SEED = 42
+
 
 def set_seed(seed: int = RANDOM_SEED) -> None:
     """
