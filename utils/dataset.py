@@ -4,7 +4,7 @@ BraTS Dataset with extreme memory optimization, shared cache subsetting, and rob
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import nibabel as nib
 import numpy as np
@@ -22,7 +22,7 @@ class BraTSDataset(Dataset):
         patient_ids: List[str],
         image_size: int = 128,
         mode: str = "train",
-        prepared_cache: Optional[Dict] = None,
+        prepared_cache: Optional[dict] = None,
         output_dir: Optional[Path] = None,
     ):
         self.data_dir = data_dir
@@ -137,7 +137,7 @@ class BraTSDataset(Dataset):
                 f.write("\n".join(skipped_patients))
             print(f"📝 Full skip list saved to {log_path}")
 
-    def get_cache(self) -> Dict:
+    def get_cache(self) -> dict:
         return {
             "valid_patient_ids": self.valid_patient_ids,
             "patient_cache": self.patient_cache,

@@ -1,7 +1,7 @@
+
 """
 Visualization utilities with Alpha Blending and MC Dropout (v3.1 Final Release Gold Master)
 """
-
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -27,7 +27,7 @@ def mc_dropout_inference(
     image_tensor: torch.Tensor,
     n_iterations: int = config.MC_ITERATIONS,
     device: torch.device = config.DEVICE,
-    method: str = "var",
+    method: str = 'var'
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     MC Dropout 推論 (v3.1 Final)
@@ -42,10 +42,10 @@ def mc_dropout_inference(
             output = torch.sigmoid(model(image_tensor))
             preds.append(output.cpu().numpy())
 
-    preds = np.array(preds)  # (N, B, C, H, W)
+    preds = np.array(preds) # (N, B, C, H, W)
     mean_pred = np.mean(preds, axis=0)
 
-    if method == "entropy":
+    if method == 'entropy':
         # Predictive Entropy: -p*log(p) - (1-p)*log(1-p)
         p = np.clip(mean_pred, 1e-8, 1.0 - 1e-8)
         uncertainty = -(p * np.log(p) + (1 - p) * np.log(1 - p))
@@ -63,33 +63,33 @@ def plot_results_with_uncertainty(
     prediction: np.ndarray,
     uncertainty: np.ndarray,
     save_path: Optional[Path] = None,
-    title: str = "Brain MRI Tumor Segmentation",
+    title: str = "Brain MRI Tumor Segmentation"
 ) -> None:
     """
     視覺化結果：原圖、GT、預測、不確定性、疊加圖 (v3.1 Final)
     """
     fig, axes = plt.subplots(1, 5, figsize=(25, 5))
 
-    axes[0].imshow(image[0], cmap="gray")
+    axes[0].imshow(image[0], cmap='gray')
     axes[0].set_title("MRI (FLAIR)")
-    axes[0].axis("off")
+    axes[0].axis('off')
 
-    axes[1].imshow(mask[0], cmap="gray")
+    axes[1].imshow(mask[0], cmap='gray')
     axes[1].set_title("Ground Truth")
-    axes[1].axis("off")
+    axes[1].axis('off')
 
-    axes[2].imshow(prediction[0], cmap="gray")
+    axes[2].imshow(prediction[0], cmap='gray')
     axes[2].set_title("Prediction")
-    axes[2].axis("off")
+    axes[2].axis('off')
 
-    im = axes[3].imshow(uncertainty[0], cmap="viridis")
+    im = axes[3].imshow(uncertainty[0], cmap='viridis')
     axes[3].set_title("Uncertainty Map")
-    axes[3].axis("off")
+    axes[3].axis('off')
     plt.colorbar(im, ax=axes[3], fraction=0.046, pad=0.04)
 
     # Overlay (v3.1 Final Alpha Blending)
     img_norm = (image[0] - image[0].min()) / (image[0].max() - image[0].min() + 1e-8)
-    overlay = np.stack([img_norm] * 3, axis=-1)
+    overlay = np.stack([img_norm]*3, axis=-1)
 
     # 建立紅色遮罩
     red_mask = np.zeros_like(overlay)
@@ -102,12 +102,12 @@ def plot_results_with_uncertainty(
 
     axes[4].imshow(overlay)
     axes[4].set_title("Overlay (Alpha Blending)")
-    axes[4].axis("off")
+    axes[4].axis('off')
 
-    plt.suptitle(title, fontsize=16, fontweight="bold")
+    plt.suptitle(title, fontsize=16, fontweight='bold')
     plt.tight_layout()
 
     if save_path:
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(str(save_path), dpi=150, bbox_inches="tight")
+        plt.savefig(str(save_path), dpi=150, bbox_inches='tight')
     plt.close()

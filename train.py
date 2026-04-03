@@ -195,19 +195,26 @@ class Trainer:
                 )
 
     def plot_curves(self) -> None:
-        fig, axes = plt.subplots(1, 2, figsize=(15, 5))
-        axes[0].plot(self.history["train_loss"], label="Train")
         if self.val_loader is not None:
-            axes[0].plot(self.history["val_loss"], label="Val")
-        axes[0].set_title("Loss")
-        axes[0].set_xlabel("Epoch")
-        axes[0].legend()
+            fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+            ax_loss = axes[0]
+            ax_dice = axes[1]
+        else:
+            fig, ax_loss = plt.subplots(1, 1, figsize=(7.5, 5))
+            ax_dice = None
 
+        ax_loss.plot(self.history["train_loss"], label="Train")
         if self.val_loader is not None:
-            axes[1].plot(self.history["val_dice"], label="Val Dice", color="green")
-            axes[1].set_title("Dice Score")
-            axes[1].set_xlabel("Epoch")
-            axes[1].legend()
+            ax_loss.plot(self.history["val_loss"], label="Val")
+        ax_loss.set_title("Loss")
+        ax_loss.set_xlabel("Epoch")
+        ax_loss.legend()
+
+        if ax_dice is not None:
+            ax_dice.plot(self.history["val_dice"], label="Val Dice", color="green")
+            ax_dice.set_title("Dice Score")
+            ax_dice.set_xlabel("Epoch")
+            ax_dice.legend()
 
         plt.tight_layout()
         plt.savefig(self.output_dir / "loss_curve.png", dpi=150, bbox_inches="tight")

@@ -1,16 +1,10 @@
-# Core dependencies
-torch>=2.0.0
-numpy>=1.24.0
-nibabel>=5.0.0
-scikit-image>=0.20.0
-
-# Training utilities
-tqdm>=4.65.0
-tensorboard>=2.13.0
-
-# Visualization
-matplotlib>=3.7.0
-
-# Optional dependencies
-# albumentations>=1.3.0  # For data augmentation (requires opencv-python)
-# kaggle>=1.5.0          # For automatic dataset download
+torch
+torchvision
+torchaudio
+numpy
+nibabel
+scikit-image
+tqdm
+matplotlib
+tensorboard
+kaggle

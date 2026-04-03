@@ -4,11 +4,15 @@ Main CLI for Brain MRI Segmentation Project (v3.1 Final Release Gold Master)
 
 import argparse
 import random
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+
+project_root = Path(__file__).resolve().parent
+sys.path.insert(0, str(project_root))
 
 import config
 from models import AttentionUNet

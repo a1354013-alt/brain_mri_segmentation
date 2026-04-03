@@ -20,7 +20,7 @@ import torch
 
 # Add project root to path FIRST
 project_root = Path(__file__).resolve().parent.parent
-sys.path.append(str(project_root))
+sys.path.insert(0, str(project_root))
 
 # Now import local modules that depend on sys.path
 from models import AttentionUNet

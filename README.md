@@ -1,5 +1,5 @@
 # Brain MRI Tumor Segmentation (Attention U-Net)
-# v3.1 Final Release
+## v3.1 Final Release
 
 基於 **Attention U-Net** 的腦部 MRI 腫瘤分割專案，支援不確定性估計、極致記憶體優化與工業級魯棒性的資料處理流程。
 
@@ -7,19 +7,27 @@
 
 ## 📋 專案更新亮點
 
-v3.1
+### v3.1
 - 修正 smoke_test import 順序問題
 - 改善 prepared_cache missing log 檔名策略
-- validation progress bar dice 顯示修正
-- 全專案版本標示同步
+- 修正 validation progress bar dice 顯示
+- 完成全專案版本標示同步
 
-v3.0
+### v3.0
+- 移除 hot path import
+- prepared_cache 無有效 PID 時改為 raise ValueError
+- 新增 smoke test
 
-- **v3.0: 效能與穩定性打磨**：移出了 Hot Path 中的 `skimage.transform.resize` import，強化了 `prepared_cache` 的錯誤處理（改為 `raise ValueError`），並新增了核心流程的 **冒煙測試 (Smoke Test)**。
-- **v2.9: Proxy Cache 安全性修復**：修復了 `proxy_cache` 可能因快取資料缺失而塞入 `None` 導致推論崩潰的隱患。
-- **v2.8: 極致記憶體優化 (Extreme Memory Optimization)**：實作了「真正逐切片掃描」機制。在資料集準備階段，不再將整個 3D Volume 載入記憶體，而是逐切片讀取並計算腫瘤像素，將 RAM 佔用降至最低。
-- **v2.8: 快取安全子集化 (Safe Cache Subsetting)**：強化了快取共享邏輯，加入 PID 存在性檢查與防呆機制，確保訓練集與驗證集在共享快取時能真正分離且不崩潰。
-- **v2.7: 修正快取共享子集化錯誤**：修復了舊版中驗證集會繼承訓練集所有 ID 的重大邏輯錯誤。
+### v2.9
+- prepared_cache 子集化
+- proxy_cache None 防護
+
+### v2.8
+- 極致記憶體優化 (Extreme Memory Optimization)
+- 快取安全子集化 (Safe Cache Subsetting)
+
+### v2.7
+- 修正快取共享子集化錯誤
 
 ---
 
@@ -45,6 +53,12 @@ python scripts/download_brats.py --auto
 ```
 
 ### 2. 冒煙測試
+Before running the smoke test, please install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
 ```bash
 # 驗證核心流程 (Dataset, Model, Inference) 是否正常
 python tests/smoke_test.py
@@ -68,8 +82,8 @@ python main.py demo
 ```
 brain_mri_segmentation/
 ├── config.py              # 核心配置
-├── main.py                # CLI 入口 (含快取共享子集化)
-├── train.py               # 訓練邏輯 (Last Checkpoint 儲存)
+├── main.py                # CLI 入口
+├── train.py               # 訓練邏輯
 ├── models/
 │   └── attention_unet.py  # 具備斷言保護的模型
 ├── utils/
