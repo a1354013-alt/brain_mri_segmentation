@@ -37,7 +37,7 @@ def get_patient_ids(data_dir: Path) -> list[str]:
     return sorted([d.name for d in data_dir.iterdir() if d.is_dir()])
 
 
-def train_command(args):
+def train_command(args: argparse.Namespace) -> None:
     print("\n🚀 Training Mode (v3.1 Final)")
     config.set_seed()
 
@@ -110,7 +110,7 @@ def train_command(args):
     trainer.train()
 
 
-def infer_command(args):
+def infer_command(args: argparse.Namespace) -> None:
     print("\n🔍 Inference Mode (v3.1 Final)")
 
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
@@ -168,7 +168,7 @@ def infer_command(args):
     print(f"✅ Saved to {save_path}")
 
 
-def demo_command(args):
+def demo_command(args: argparse.Namespace) -> None:
     print("\n🎯 Demo Mode (v3.1 Final)")
     config.set_seed()
 

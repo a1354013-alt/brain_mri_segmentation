@@ -23,8 +23,8 @@
 - proxy_cache None 防護
 
 ### v2.8
-- 極致記憶體優化 (Extreme Memory Optimization)
-- 快取安全子集化 (Safe Cache Subsetting)
+- 極致記憶體優化
+- 快取安全子集化
 
 ### v2.7
 - 修正快取共享子集化錯誤
@@ -53,11 +53,13 @@ python scripts/download_brats.py --auto
 ```
 
 ### 2. 冒煙測試
-Before running the smoke test, please install dependencies:
+Before running the smoke test, install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
+
+**Note:** This project requires Python 3.9+ and can run smoke tests and demos on CPU without a dedicated GPU.
 
 ```bash
 # 驗證核心流程 (Dataset, Model, Inference) 是否正常

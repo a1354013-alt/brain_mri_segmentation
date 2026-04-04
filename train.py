@@ -108,6 +108,11 @@ class Trainer:
         return total_loss / len(self.train_loader)
 
     def validate(self, epoch: int) -> Tuple[float, float]:
+        """
+        Performs validation for one epoch.
+        Returns (val_loss, val_dice).
+        If no validation loader is provided (self.val_loader is None), returns (0.0, 0.0).
+        """
         if self.val_loader is None:
             return 0.0, 0.0
 
@@ -197,10 +202,9 @@ class Trainer:
     def plot_curves(self) -> None:
         if self.val_loader is not None:
             fig, axes = plt.subplots(1, 2, figsize=(15, 5))
-            ax_loss = axes[0]
-            ax_dice = axes[1]
+            ax_loss, ax_dice = axes
         else:
-            fig, ax_loss = plt.subplots(1, 1, figsize=(7.5, 5))
+            fig, ax_loss = plt.subplots(1, 1, figsize=(8, 5))
             ax_dice = None
 
         ax_loss.plot(self.history["train_loss"], label="Train")

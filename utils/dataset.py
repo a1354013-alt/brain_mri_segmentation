@@ -173,8 +173,9 @@ class BraTSDataset(Dataset):
 
         for mod in modalities:
             # 強化防呆檢查，確保 proxy_cache[pid] 存在且不為 None
-            if config.USE_PROXY_CACHE and pid in self.proxy_cache and self.proxy_cache[pid] is not None:
-                proxy = self.proxy_cache[pid][mod]
+            proxy_bundle = self.proxy_cache.get(pid)
+            if config.USE_PROXY_CACHE and proxy_bundle is not None and mod in proxy_bundle:
+                proxy = proxy_bundle[mod]
             else:
                 proxy = nib.load(cache["files"][mod])
 
@@ -182,8 +183,9 @@ class BraTSDataset(Dataset):
             img_slice = self._normalize(img_slice)
             images.append(img_slice)
 
-        if config.USE_PROXY_CACHE and pid in self.proxy_cache and self.proxy_cache[pid] is not None:
-            seg_proxy = self.proxy_cache[pid]["seg"]
+        proxy_bundle = self.proxy_cache.get(pid)
+        if config.USE_PROXY_CACHE and proxy_bundle is not None and "seg" in proxy_bundle:
+            seg_proxy = proxy_bundle["seg"]
         else:
             seg_proxy = nib.load(cache["files"]["seg"])
 

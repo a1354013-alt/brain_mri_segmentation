@@ -12,6 +12,9 @@ import zipfile
 from pathlib import Path
 from typing import Optional, Tuple
 
+KAGGLE_DATASET_SLUG = "awsaf49/brats20-dataset-training-validation"
+OFFICIAL_DOWNLOAD_URL = "https://www.med.upenn.edu/cbica/brats2020/data.html"
+
 # Try importing kaggle at the top level
 try:
     import kaggle
@@ -112,8 +115,8 @@ def print_download_instructions():
     print("\n" + "=" * 70)
     print("📦 BraTS Dataset Download Instructions (v3.1 Final)")
     print("=" * 70 + "\n")
-    print("方法 1: 官方網站下載 (https://www.med.upenn.edu/cbica/brats2020/data.html)")
-    print("方法 2: Kaggle API 下載 (kaggle datasets download -d awsaf49/brats20-dataset-training-validation)")
+print(f"方法 1: 官方網站下載 ({OFFICIAL_DOWNLOAD_URL})")
+print(f"方法 2: Kaggle API 下載 (kaggle datasets download -d {KAGGLE_DATASET_SLUG})")
     print("\n資料集結構應如下:")
     print("data/Brats/Patient_XXX/...")
     print("=" * 70 + "\n")
@@ -129,7 +132,7 @@ def auto_download_kaggle(data_dir: Path):
 
     try:
         kaggle.api.dataset_download_files(
-            "awsaf49/brats20-dataset-training-validation", path=str(data_dir.parent), unzip=False
+            KAGGLE_DATASET_SLUG, path=str(data_dir.parent), unzip=False
         )
 
         # v3.1 Final 偵測最新下載的 zip 檔案
