@@ -35,6 +35,14 @@ class NoOpWriter:
     def close(self) -> None:
         return None
 
+    def __getattr__(self, _name: str):
+        # Future-proof: if training code starts calling other SummaryWriter methods,
+        # return a no-op callable instead of crashing.
+        def _noop(*_args, **_kwargs):
+            return None
+
+        return _noop
+
 
 def _make_summary_writer(tensorboard_dir: Optional[Path]):
     """
@@ -49,7 +57,10 @@ def _make_summary_writer(tensorboard_dir: Optional[Path]):
         from torch.utils.tensorboard import SummaryWriter  # type: ignore
 
         return SummaryWriter(str(tensorboard_dir))
-    except Exception:
+    except (ModuleNotFoundError, ImportError):
+        return NoOpWriter()
+    except Exception as e:
+        print(f"Warning: Failed to initialize TensorBoard SummaryWriter ({e}). Falling back to NoOpWriter.")
         return NoOpWriter()
 
 
@@ -294,7 +305,7 @@ class Trainer:
 
     def save_log(self) -> None:
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.log_file, "w", newline="") as f:
+        with open(self.log_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["epoch", "train_loss", "val_loss", "val_dice", "val_precision", "val_recall", "lr"])
             for i in range(len(self.history["train_loss"])):

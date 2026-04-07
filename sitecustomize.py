@@ -39,6 +39,31 @@ def _env_flag(name: str) -> bool:
 # Disable writing .pyc files (helps when __pycache__ writes are blocked).
 if _env_flag("BMS_DONT_WRITE_BYTECODE"):
     sys.dont_write_bytecode = True
+    os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+
+    # Some environments block atomic renames used by py_compile/compileall (often due to AV/policy),
+    # which can make syntax checks fail even though code is valid. When bytecode writes are disabled,
+    # patch py_compile.compile to perform an in-memory compile without touching the filesystem.
+    try:
+        import py_compile
+
+        _orig_compile = py_compile.compile
+
+        def _compile_no_write(file, cfile=None, dfile=None, doraise=False, optimize=-1, **kwargs):
+            try:
+                src = open(file, "rb").read()
+                # Decode best-effort; invalid bytes will surface as SyntaxError on compile anyway.
+                text = src.decode("utf-8", errors="replace")
+                compile(text, dfile or file, "exec", dont_inherit=True, optimize=optimize)
+                # Return a plausible path to keep callers happy, but do not write anything.
+                return cfile or file
+            except Exception:
+                # If anything goes wrong, fall back to the original behavior.
+                return _orig_compile(file, cfile=cfile, dfile=dfile, doraise=doraise, optimize=optimize, **kwargs)
+
+        py_compile.compile = _compile_no_write  # type: ignore[assignment]
+    except Exception:
+        pass
 
 # Force UTF-8 stdio for terminals that cannot encode some characters.
 if _env_flag("BMS_FORCE_UTF8"):

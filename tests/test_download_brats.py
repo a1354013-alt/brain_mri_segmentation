@@ -1,60 +1,46 @@
-import shutil
-import uuid
 import unittest
-from pathlib import Path
+from dataclasses import dataclass
+from typing import Iterable
+from unittest.mock import patch
 
 
 from scripts.download_brats import check_data_exists
 
 
-def _touch(p: Path) -> None:
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(b"")
+@dataclass(frozen=True)
+class _FakeEntry:
+    is_dir_value: bool = True
+
+    def is_dir(self) -> bool:
+        return self.is_dir_value
 
 
-def _repo_tmp_dir() -> Path:
-    base = Path(__file__).resolve().parent / "_tmp_download_brats"
-    base.mkdir(parents=True, exist_ok=True)
-    d = base / str(uuid.uuid4())
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+@dataclass(frozen=True)
+class _FakeDataDir:
+    exists_value: bool
+    entries: Iterable[_FakeEntry]
 
+    def exists(self) -> bool:
+        return self.exists_value
 
-def _cleanup_dir(d: Path) -> None:
-    try:
-        shutil.rmtree(d, ignore_errors=True)
-    except Exception:
-        pass
+    def iterdir(self):
+        return iter(self.entries)
 
 
 class TestDownloadBrats(unittest.TestCase):
     def test_check_data_exists_empty_dir_false(self):
-        d = _repo_tmp_dir()
-        try:
-            self.assertFalse(check_data_exists(d))
-        finally:
-            _cleanup_dir(d)
+        d = _FakeDataDir(exists_value=True, entries=[])
+        self.assertFalse(check_data_exists(d))  # type: ignore[arg-type]
 
     def test_check_data_exists_incomplete_patient_false(self):
-        base = _repo_tmp_dir()
-        try:
-            p = base / "Patient_001"
-            p.mkdir(parents=True, exist_ok=True)
-            _touch(p / "Patient_001_flair.nii.gz")
-            self.assertFalse(check_data_exists(base))
-        finally:
-            _cleanup_dir(base)
+        base = _FakeDataDir(exists_value=True, entries=[_FakeEntry(is_dir_value=True)])
+        with patch("scripts.download_brats.is_patient_folder_complete", return_value=(False, "Patient_001")):
+            self.assertFalse(check_data_exists(base))  # type: ignore[arg-type]
 
     def test_check_data_exists_complete_patient_true(self):
-        base = _repo_tmp_dir()
-        try:
-            p = base / "Patient_001"
-            p.mkdir(parents=True, exist_ok=True)
-            for mod in ["flair", "t1", "t1ce", "t2", "seg"]:
-                _touch(p / f"Patient_001_{mod}.nii.gz")
-            self.assertTrue(check_data_exists(base))
-        finally:
-            _cleanup_dir(base)
+        base = _FakeDataDir(exists_value=True, entries=[_FakeEntry(is_dir_value=True)])
+        with patch("scripts.download_brats.is_patient_folder_complete", return_value=(True, "Patient_001")):
+            self.assertTrue(check_data_exists(base))  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

@@ -10,17 +10,13 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-project_root = Path(__file__).resolve().parent
-sys.path.insert(0, str(project_root))
-
-# Keep CPU thread usage conservative by default. This reduces memory pressure on constrained hosts.
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-# Avoid noisy matplotlib cache permission issues on some Windows environments.
-os.environ.setdefault("MPLCONFIGDIR", str(Path(os.getenv("TEMP", ".")) / "bms_mpl_cache"))
+# Avoid writing bytecode caches into the repo (helps keep the workspace clean on Windows/AV-restricted hosts).
+sys.dont_write_bytecode = True
 
 import config
+
+# Avoid noisy matplotlib cache permission issues on some Windows environments.
+os.environ.setdefault("MPLCONFIGDIR", str(Path(os.getenv("TEMP", ".")) / "bms_mpl_cache"))
 
 
 def worker_init_fn(worker_id: int) -> None:
@@ -54,24 +50,30 @@ def quick_validate_two_phase(pid: str, *, require_tumor: bool) -> bool:
     """
     Two-phase patient validation for CLI auto-selection.
 
-    Phase 1 (fast): basic file/shape checks + sampled tumor slices.
-    Phase 2 (strict): full seg scan for tumor presence (only if phase 1 passes).
+    Phase 1 (fast): file existence + NIfTI readability + shape sanity + modality/seg shape consistency.
+    Phase 2 (strict): full seg scan for tumor presence (only if phase 1 passes and require_tumor=True).
 
     This keeps demo/infer selection reliable while avoiding a full-volume scan for every pid.
     """
     from utils import BraTSDataset
 
+    # Phase 1: structural validation only. Do NOT require tumor here (avoid false negatives from sampling).
     if not BraTSDataset.quick_validate_patient(
         config.DATA_DIR,
         pid,
-        require_tumor=require_tumor,
+        require_tumor=False,
         strict_tumor_check=False,
     ):
         return False
+
+    # Phase 2: optional strict tumor validation.
+    if not require_tumor:
+        return True
+
     return BraTSDataset.quick_validate_patient(
         config.DATA_DIR,
         pid,
-        require_tumor=require_tumor,
+        require_tumor=True,
         strict_tumor_check=True,
     )
 
@@ -101,7 +103,7 @@ def apply_overrides_from_args(args: argparse.Namespace) -> dict:
     return overrides_applied
 
 
-def save_run_config(command: str, args: argparse.Namespace, overrides_applied: dict) -> None:
+def save_run_config(command: str, args: argparse.Namespace, overrides_applied: dict, *, model_info: dict | None = None) -> None:
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Keep args JSON-safe and stable over time (argparse namespaces can grow new fields).
@@ -127,6 +129,15 @@ def save_run_config(command: str, args: argparse.Namespace, overrides_applied: d
     ]
     args_payload = {k: getattr(args, k, None) for k in args_whitelist}
 
+    # Stable schema across commands: always include a `model` section.
+    model_payload = {
+        "model_loaded": None,
+        "weights_source": None,
+        "checkpoint_path": None,
+    }
+    if isinstance(model_info, dict):
+        model_payload.update({k: model_info.get(k) for k in model_payload.keys()})
+
     payload = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "command": command,
@@ -149,6 +160,7 @@ def save_run_config(command: str, args: argparse.Namespace, overrides_applied: d
             "DICE_WEIGHT": config.DICE_WEIGHT,
             "BCE_WEIGHT": config.BCE_WEIGHT,
         },
+        "model": model_payload,
     }
     out_path = config.OUTPUT_DIR / f"run_config_{command}.json"
     with open(out_path, "w", encoding="utf-8") as f:
@@ -256,6 +268,8 @@ def infer_command(args: argparse.Namespace) -> None:
     print("\nInference Mode (v3.1 stable iteration)")
     overrides_applied = apply_overrides_from_args(args)
 
+    import inspect
+
     try:
         import numpy as np
     except MemoryError:
@@ -282,15 +296,91 @@ def infer_command(args: argparse.Namespace) -> None:
 
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
 
-    if config.MODEL_STATE_PATH.exists():
-        model.load_state_dict(torch.load(config.MODEL_STATE_PATH, map_location=config.DEVICE))
-        print(f"Loaded model state from {config.MODEL_STATE_PATH}")
-    elif config.CHECKPOINT_PATH.exists():
-        checkpoint = torch.load(config.CHECKPOINT_PATH, map_location=config.DEVICE)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        print(f"Loaded model state from checkpoint {config.CHECKPOINT_PATH}")
-    else:
+    def _torch_safe_load(path: Path):
+        """
+        Best-effort safe load across PyTorch versions.
+
+        If supported, try `weights_only=True` first (safer: avoids unpickling arbitrary objects),
+        then fall back to the legacy behavior if the object cannot be loaded in weights-only mode.
+        """
+        kwargs = {"map_location": config.DEVICE}
+        try:
+            if "weights_only" in inspect.signature(torch.load).parameters:
+                try:
+                    return torch.load(path, **kwargs, weights_only=True)
+                except Exception:
+                    # Fall back to legacy loading for checkpoints or older files.
+                    return torch.load(path, **kwargs)
+        except (TypeError, ValueError):
+            pass
+        return torch.load(path, **kwargs)
+
+    def _torch_load_state_dict(path: Path):
+        return _torch_safe_load(path)
+
+    def _is_state_dict(obj) -> bool:
+        if not isinstance(obj, dict):
+            return False
+        if not obj:
+            return False
+        # Heuristic: state_dict-like objects have string keys and tensor values.
+        if not all(isinstance(k, str) for k in obj.keys()):
+            return False
+        try:
+            import torch as _torch  # type: ignore
+
+            return any(_torch.is_tensor(v) for v in obj.values())
+        except Exception:
+            return False
+
+    def _load_model_weights() -> dict:
+        """
+        Load weights deterministically and record audit info.
+
+        - best_model_state: expects a raw state_dict
+        - checkpoint: expects a dict with 'model_state_dict'
+        - otherwise: random init
+        """
+        if config.MODEL_STATE_PATH.exists():
+            obj = _torch_safe_load(config.MODEL_STATE_PATH)
+            if not _is_state_dict(obj):
+                raise ValueError(f"Expected state_dict at {config.MODEL_STATE_PATH}, got {type(obj)}")
+            model.load_state_dict(obj)
+            print(f"Loaded model state from {config.MODEL_STATE_PATH}")
+            return {
+                "model_loaded": True,
+                "weights_source": "best_model_state",
+                "checkpoint_path": str(config.MODEL_STATE_PATH),
+            }
+
+        if config.CHECKPOINT_PATH.exists():
+            obj = _torch_safe_load(config.CHECKPOINT_PATH)
+            if not isinstance(obj, dict) or "model_state_dict" not in obj:
+                raise ValueError(f"Expected checkpoint dict with 'model_state_dict' at {config.CHECKPOINT_PATH}")
+            sd = obj["model_state_dict"]
+            if not _is_state_dict(sd):
+                raise ValueError(f"Checkpoint 'model_state_dict' is not state_dict-like at {config.CHECKPOINT_PATH}")
+            model.load_state_dict(sd)
+            print(f"Loaded model state from checkpoint {config.CHECKPOINT_PATH}")
+            return {
+                "model_loaded": True,
+                "weights_source": "checkpoint",
+                "checkpoint_path": str(config.CHECKPOINT_PATH),
+            }
+
         print("Warning: No model found. Using random weights.")
+        return {
+            "model_loaded": False,
+            "weights_source": "random_init",
+            "checkpoint_path": None,
+        }
+
+    model_info = {
+        "model_loaded": False,
+        "weights_source": "random_init",
+        "checkpoint_path": None,
+    }
+    model_info = _load_model_weights()
 
     patient_ids = get_patient_ids(config.DATA_DIR)
     if len(patient_ids) == 0:
@@ -325,7 +415,7 @@ def infer_command(args: argparse.Namespace) -> None:
         return
 
     # Only record run config after we have a runnable dataset/patient selection.
-    save_run_config("infer", args, overrides_applied=overrides_applied)
+    save_run_config("infer", args, overrides_applied=overrides_applied, model_info=model_info)
 
     image, mask = dataset[0]
 
@@ -481,6 +571,18 @@ def main():
     subparsers.add_parser("demo", parents=[common])
 
     args = parser.parse_args()
+
+    # Python version policy:
+    # - Unit tests may run on newer versions (depending on stubs), but the full CLI depends on
+    #   PyTorch and the scientific stack, which may lag behind new Python releases.
+    # - For Python 3.13+, block high-risk commands with a clear message.
+    if sys.version_info >= (3, 13) and args.command in {"train", "infer", "demo"}:
+        print("Error: Python 3.13+ is high risk for this project due to PyTorch/scientific stack support.")
+        print("Recommended: Python 3.10 or 3.11 (create a clean env, then install requirements.txt).")
+        print("Note: Some unit tests may still pass on newer Python versions, but full CLI stability is not guaranteed.")
+        print(f"Detected Python: {sys.version.split()[0]}")
+        raise SystemExit(2)
+
     if args.command == "train":
         train_command(args)
     elif args.command == "infer":

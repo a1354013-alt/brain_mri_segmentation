@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
+*.pyo
 *$py.class
 *.so
 .Python
@@ -38,6 +39,8 @@ outputs/
 *.jpg
 *.csv
 *.log
+*.zip
+tests/_tmp*
 
 # Jupyter
 .ipynb_checkpoints/
@@ -60,4 +63,3 @@ tensorboard/
 
 # Local scratch
 scripts/_patch_*
-tests/_tmp_*/

@@ -9,6 +9,7 @@ It is intentionally conservative and does not claim production readiness.
 - Dataset validation fails fast with actionable messages.
 - Inference can run without training-only deps being installed.
 - Repo hygiene: deliverable zip excludes local artifacts.
+- Release packaging is fixed: delivery zip is generated only via `python scripts/make_release_zip.py --out ...` (written under `dist/`).
 
 ## Verification Commands
 

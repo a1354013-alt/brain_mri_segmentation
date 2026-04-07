@@ -38,6 +38,14 @@ Notes:
 
 ## Install
 
+Recommended Python:
+
+- Python 3.10 or 3.11 is recommended for stable PyTorch/scientific stack installs.
+- Python 3.13+ is treated as high risk in this project:
+  - Some unit tests may still pass (depending on stubs and local environment).
+  - The full CLI (`python main.py train|infer|demo`) will exit early with a clear message, because PyTorch/scientific
+    stack support can lag behind new Python releases.
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -71,6 +79,26 @@ python main.py infer --uncertainty entropy
 python main.py infer --patient_id Patient_001 --uncertainty var
 ```
 
+Weights note:
+
+- If no saved weights are found (`outputs/best_model_state.pth` or `outputs/best_checkpoint.pth`), inference falls back to
+  random initialization. This is useful for smoke/demo flows only and does not represent a meaningful segmentation model.
+  The run config records `model_loaded` and `weights_source` for auditability.
+
+## Run Config Schema (run_config_*.json)
+
+Each CLI command writes a JSON run config after preflight checks pass. The top-level schema is stable:
+
+- `timestamp`: ISO timestamp
+- `command`: one of `train` / `infer` / `demo`
+- `args`: CLI args (whitelisted)
+- `overrides_applied`: explicit overrides applied to config
+- `config`: resolved config values (for reproducibility)
+- `model`:
+  - `model_loaded`: true/false/null
+  - `weights_source`: `best_model_state` / `checkpoint` / `random_init` / null
+  - `checkpoint_path`: path string or null
+
 Inference with 3D NIfTI outputs:
 
 ```bash
@@ -87,8 +115,8 @@ python main.py demo
 
 Auto-selection uses a two-phase strategy:
 
-1. Fast check: file presence + NIfTI readability + shape consistency + sampled tumor slices
-2. Strict check: full seg scan for tumor presence (only for candidates that pass phase 1)
+1. Phase 1 (fast): file presence + NIfTI readability + shape consistency + modality/seg shape consistency
+2. Phase 2 (strict, optional): full seg scan for tumor presence (only for candidates that pass phase 1)
 
 This reduces false negatives while avoiding a full scan over every patient.
 
@@ -113,6 +141,7 @@ This repo uses `unittest` for lightweight integration tests (no dataset required
 | `python tests/smoke_test.py` | No | torch | Model init + one forward pass (fast) |
 | `python -m unittest -q tests.test_download_brats` | No | None | `check_data_exists()` correctness on empty/partial/complete layouts |
 | `python -m unittest -q tests.test_cli_integration` | No | None (stubbed) | CLI boundaries: train split protections, infer not importing training deps, device override, `--save_nifti` branch, demo empty dataset safe exit |
+| `python -m compileall -q .` | No | None | Syntax-level compile check (project shim prevents writing `.pyc` files) |
 | `python main.py train` | Yes | torch, nibabel, etc. | End-to-end data scan, split, training loop |
 | `python main.py infer --patient_id <pid>` | Yes | torch, nibabel, matplotlib | End-to-end single-patient infer + PNG |
 | `python main.py infer --save_nifti` | Yes | torch, nibabel | 3D NIfTI export branch |
@@ -126,9 +155,33 @@ ruff check . --fix
 ruff format .
 ```
 
-## Clean Delivery Zip
+## Release Process
 
-To build a clean source zip that excludes local artifacts (for example `.git/`, `__pycache__/`, `outputs/`, `data/`):
+Official release artifacts must be generated via the release script. Do not manually zip the repo folder.
+
+To build a clean source zip that excludes local artifacts (for example `.git/`, `__pycache__/`, `outputs/`, `data/`,
+`archive/`):
+
+```bash
+python scripts/make_release_zip.py --out brain_mri_segmentation_src.zip
+```
+
+This writes the release zip under `dist/` (created if missing), and enforces a conservative exclude list so the delivery
+does not depend on manual cleanup.
+
+Repository snapshot note:
+
+- A working repo may contain local artifacts or locked files (AV/policy), but these must never be treated as the official
+  deliverable.
+- The only official deliverable is the release zip produced under `dist/` by `scripts/make_release_zip.py`.
+
+Release zip verification (no dataset required): run the script above and inspect `dist/brain_mri_segmentation_src.zip`.
+
+Optional local cleanup (recommended before packaging):
+
+```bash
+python scripts/clean_project.py --clean-dist
+```
 
 ```bash
 python scripts/make_release_zip.py --out brain_mri_segmentation_src.zip

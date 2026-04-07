@@ -69,7 +69,7 @@ class BraTSDataset(Dataset):
                 # It is intentionally overwritten each run to keep logs concise.
                 log_path = self.output_dir / f"prepared_cache_missing_{self.mode}.txt"
                 self.output_dir.mkdir(parents=True, exist_ok=True)
-                with open(log_path, "w") as f:
+                with open(log_path, "w", encoding="utf-8") as f:
                     f.write("\n".join(missing_in_cache))
                 print(f"Full missing list saved to {log_path}")
 
@@ -198,7 +198,7 @@ class BraTSDataset(Dataset):
             print(f"Warning: Skipped {len(skipped_patients)} patients. (First 10 shown in log)")
             log_path = self.output_dir / "skipped_patients.txt"
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            with open(log_path, "w") as f:
+            with open(log_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(skipped_patients))
             print(f"Full skip list saved to {log_path}")
 

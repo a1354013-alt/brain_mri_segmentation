@@ -34,6 +34,9 @@
 - `python scripts/make_release_zip.py --out brain_mri_segmentation_src.zip`
 
 This excludes local artifacts such as `.git/`, `__pycache__/`, `outputs/`, and `data/`.
+The delivery zip should be generated via this script rather than zipping the working directory directly.
+The script also excludes common local caches and scratch artifacts (for example `tests/_tmp_*`, `*.pyc`, `*.pth`, `*.png`).
+The release zip is always written under `dist/` (for example `dist/brain_mri_segmentation_src.zip`).
 
 ## Residual Risks / Constraints
 
