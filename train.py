@@ -1,20 +1,91 @@
 """
-Training module with unified path handling and last checkpoint saving (v3.1 Final Release Gold Master)
+Training module (v3.1 stable iteration)
 """
 
-import csv
-from pathlib import Path
-from typing import Tuple
+from __future__ import annotations
 
-import matplotlib.pyplot as plt
+import csv
+import os
+import tempfile
+from pathlib import Path
+from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.cuda.amp import GradScaler, autocast
-from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 import config
+
+
+# Avoid noisy matplotlib cache permissions issues on some Windows environments.
+os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "bms_mpl_cache"))
+
+
+class NoOpWriter:
+    """
+    TensorBoard fallback that keeps training runnable without the tensorboard package.
+
+    This is intentionally tiny: only the methods used by this project are provided.
+    """
+
+    def add_scalar(self, *_args, **_kwargs) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+def _make_summary_writer(tensorboard_dir: Optional[Path]):
+    """
+    Best-effort SummaryWriter creation.
+
+    - If tensorboard_dir is None: disable logging (NoOpWriter)
+    - If tensorboard is not installed: disable logging (NoOpWriter)
+    """
+    if tensorboard_dir is None:
+        return NoOpWriter()
+    try:
+        from torch.utils.tensorboard import SummaryWriter  # type: ignore
+
+        return SummaryWriter(str(tensorboard_dir))
+    except Exception:
+        return NoOpWriter()
+
+
+def _make_grad_scaler(device_type: str, enabled: bool):
+    if not enabled:
+        return None
+    try:
+        from torch.amp import GradScaler as AmpGradScaler  # type: ignore
+
+        return AmpGradScaler(device_type=device_type, enabled=True)
+    except Exception:
+        from torch.cuda.amp import GradScaler as CudaGradScaler  # type: ignore
+
+        return CudaGradScaler(enabled=True)
+
+
+def _autocast_ctx(device_type: str, enabled: bool):
+    """
+    Compatibility wrapper for autocast across torch versions.
+
+    Newer PyTorch: torch.amp.autocast(device_type=...)\n
+    Older PyTorch: torch.cuda.amp.autocast(...)\n
+    """
+    if not enabled:
+        # Cheap no-op context manager.
+        from contextlib import nullcontext
+
+        return nullcontext()
+    try:
+        from torch.amp import autocast as amp_autocast  # type: ignore
+
+        return amp_autocast(device_type=device_type, enabled=True)
+    except Exception:
+        from torch.cuda.amp import autocast as cuda_autocast  # type: ignore
+
+        return cuda_autocast(enabled=True)
 
 
 def dice_coeff_per_sample(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -44,7 +115,7 @@ class Trainer:
         self,
         model: nn.Module,
         train_loader: torch.utils.data.DataLoader,
-        val_loader: torch.utils.data.DataLoader,
+        val_loader: torch.utils.data.DataLoader | None,
         device: torch.device,
         output_dir: Path,
         checkpoint_path: Path,
@@ -52,7 +123,7 @@ class Trainer:
         last_checkpoint_path: Path,
         last_model_state_path: Path,
         log_file: Path,
-        tensorboard_dir: Path,
+        tensorboard_dir: Path | None,
         use_amp: bool = True,
         total_epochs: int = config.EPOCHS,
     ):
@@ -70,14 +141,28 @@ class Trainer:
 
         self.use_amp = use_amp and (device.type == "cuda")
 
-        self.criterion = DiceLoss()
+        self.dice_criterion = DiceLoss()
+        self.bce_criterion = nn.BCEWithLogitsLoss()
         self.optimizer = optim.Adam(model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode="max", factor=0.5, patience=5)
-        self.scaler = GradScaler() if self.use_amp else None
+        self.scaler = _make_grad_scaler(device_type=device.type, enabled=self.use_amp)
 
-        self.writer = SummaryWriter(str(tensorboard_dir))
-        self.history = {"train_loss": [], "val_loss": [], "val_dice": [], "lr": []}
+        self.writer = _make_summary_writer(tensorboard_dir)
+        self.history = {
+            "train_loss": [],
+            "val_loss": [],
+            "val_dice": [],
+            "val_precision": [],
+            "val_recall": [],
+            "lr": [],
+        }
         self.best_dice = 0.0
+        self._saved_best_without_val = False
+
+    def _compute_loss(self, logits: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
+        dice = self.dice_criterion(logits, masks)
+        bce = self.bce_criterion(logits, masks)
+        return (config.DICE_WEIGHT * dice) + (config.BCE_WEIGHT * bce)
 
     def train_epoch(self, epoch: int) -> float:
         self.model.train()
@@ -88,9 +173,9 @@ class Trainer:
             self.optimizer.zero_grad()
 
             if self.use_amp:
-                with autocast():
+                with _autocast_ctx(device_type=self.device.type, enabled=True):
                     outputs = self.model(images)
-                    loss = self.criterion(outputs, masks)
+                    loss = self._compute_loss(outputs, masks)
                 self.scaler.scale(loss).backward()
                 self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), config.GRAD_CLIP_VALUE)
@@ -98,7 +183,7 @@ class Trainer:
                 self.scaler.update()
             else:
                 outputs = self.model(images)
-                loss = self.criterion(outputs, masks)
+                loss = self._compute_loss(outputs, masks)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), config.GRAD_CLIP_VALUE)
                 self.optimizer.step()
@@ -107,28 +192,41 @@ class Trainer:
             pbar.set_postfix({"loss": f"{loss.item():.4f}"})
         return total_loss / len(self.train_loader)
 
-    def validate(self, epoch: int) -> Tuple[float, float]:
+    def validate(self, epoch: int) -> Tuple[float, float, float, float]:
         """
         Performs validation for one epoch.
-        Returns (val_loss, val_dice).
-        If no validation loader is provided (self.val_loader is None), returns (0.0, 0.0).
+        Returns (val_loss, val_dice, val_precision, val_recall).
+        If no validation loader is provided (self.val_loader is None), returns zeros.
         """
         if self.val_loader is None:
-            return 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0
 
         self.model.eval()
         val_loss, val_dice = 0.0, 0.0
+        tp, fp, fn = 0.0, 0.0, 0.0
         pbar = tqdm(self.val_loader, desc=f"Epoch {epoch + 1}/{self.total_epochs} [Val]")
         with torch.no_grad():
             for batch_idx, (images, masks) in enumerate(pbar):
                 images, masks = images.to(self.device), masks.to(self.device)
                 outputs = self.model(images)
-                val_loss += self.criterion(outputs, masks).item()
+                val_loss += self._compute_loss(outputs, masks).item()
 
                 preds = (torch.sigmoid(outputs) > config.THRESHOLD).float()
                 val_dice += dice_coeff(preds, masks).item()
+
+                # Precision/Recall (binary, aggregated across batch)
+                tp += float((preds * masks).sum().item())
+                fp += float((preds * (1.0 - masks)).sum().item())
+                fn += float(((1.0 - preds) * masks).sum().item())
                 pbar.set_postfix({"dice": f"{val_dice / (batch_idx + 1):.4f}"})
-        return val_loss / len(self.val_loader), val_dice / len(self.val_loader)
+        precision = tp / (tp + fp + 1e-8)
+        recall = tp / (tp + fn + 1e-8)
+        return (
+            val_loss / len(self.val_loader),
+            val_dice / len(self.val_loader),
+            float(precision),
+            float(recall),
+        )
 
     def save_checkpoints(self, epoch: int, dice: float, is_best: bool = True) -> None:
         checkpoint = {
@@ -144,9 +242,9 @@ class Trainer:
         if is_best:
             torch.save(checkpoint, self.checkpoint_path)
             torch.save(self.model.state_dict(), self.model_state_path)
-            print(f"⭐ Best model saved (Dice: {dice:.4f})")
+            print(f"Best model saved (Dice: {dice:.4f})")
         else:
-            # v3.1 Final 使用傳入的路徑
+            # v3.1 stable iteration: use the explicit output paths passed in from CLI/demo.
             torch.save(checkpoint, self.last_checkpoint_path)
             torch.save(self.model.state_dict(), self.last_model_state_path)
 
@@ -154,7 +252,7 @@ class Trainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         for epoch in range(self.total_epochs):
             train_loss = self.train_epoch(epoch)
-            val_loss, val_dice = self.validate(epoch)
+            val_loss, val_dice, val_precision, val_recall = self.validate(epoch)
 
             if self.val_loader is not None:
                 self.scheduler.step(val_dice)
@@ -163,17 +261,28 @@ class Trainer:
             self.history["train_loss"].append(train_loss)
             self.history["val_loss"].append(val_loss)
             self.history["val_dice"].append(val_dice)
+            self.history["val_precision"].append(val_precision)
+            self.history["val_recall"].append(val_recall)
             self.history["lr"].append(lr)
 
             self.writer.add_scalar("Loss/train", train_loss, epoch)
             if self.val_loader is not None:
                 self.writer.add_scalar("Loss/val", val_loss, epoch)
                 self.writer.add_scalar("Dice/val", val_dice, epoch)
+                self.writer.add_scalar("Precision/val", val_precision, epoch)
+                self.writer.add_scalar("Recall/val", val_recall, epoch)
 
-            print(f"Epoch {epoch + 1}: Loss={train_loss:.4f}, Val Dice={val_dice:.4f}, LR={lr:.6f}")
+            print(
+                f"Epoch {epoch + 1}: Loss={train_loss:.4f}, "
+                f"Val Dice={val_dice:.4f}, Val P={val_precision:.4f}, Val R={val_recall:.4f}, LR={lr:.6f}"
+            )
 
             if val_dice > self.best_dice:
                 self.best_dice = val_dice
+                self.save_checkpoints(epoch, val_dice, is_best=True)
+            elif self.val_loader is None and epoch == 0 and not self._saved_best_without_val:
+                # No validation: still create a "best" checkpoint for consistency (use epoch-0 weights).
+                self._saved_best_without_val = True
                 self.save_checkpoints(epoch, val_dice, is_best=True)
 
             # 每一輪都更新最後一份保險
@@ -187,7 +296,7 @@ class Trainer:
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.log_file, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["epoch", "train_loss", "val_loss", "val_dice", "lr"])
+            writer.writerow(["epoch", "train_loss", "val_loss", "val_dice", "val_precision", "val_recall", "lr"])
             for i in range(len(self.history["train_loss"])):
                 writer.writerow(
                     [
@@ -195,11 +304,19 @@ class Trainer:
                         self.history["train_loss"][i],
                         self.history["val_loss"][i],
                         self.history["val_dice"][i],
+                        self.history["val_precision"][i],
+                        self.history["val_recall"][i],
                         self.history["lr"][i],
                     ]
                 )
 
     def plot_curves(self) -> None:
+        try:
+            import matplotlib.pyplot as plt  # type: ignore
+        except Exception as e:
+            print(f"Warning: matplotlib not available ({e}). Skipping curve plot.")
+            return
+
         if self.val_loader is not None:
             fig, axes = plt.subplots(1, 2, figsize=(15, 5))
             ax_loss, ax_dice = axes

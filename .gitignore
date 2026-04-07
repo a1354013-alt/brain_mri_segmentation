@@ -57,3 +57,7 @@ Thumbs.db
 # Tensorboard
 runs/
 tensorboard/
+
+# Local scratch
+scripts/_patch_*
+tests/_tmp_*/

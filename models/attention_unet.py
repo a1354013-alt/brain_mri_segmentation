@@ -1,6 +1,12 @@
 """
-Attention U-Net implementation with robust input size protection and assertions (v3.1 Final Release Gold Master)
+Attention U-Net implementation (v3.1 stable iteration).
+
+Includes defensive alignment logic in the skip connections to tolerate off-by-one spatial sizes
+from odd input dimensions.
 """
+
+from __future__ import annotations
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -87,7 +93,7 @@ class AttentionUNet(nn.Module):
 
     def _align_and_concat(self, x_skip: torch.Tensor, x_up: torch.Tensor) -> torch.Tensor:
         """
-        尺寸對齊保護 (v3.1 Final)：
+        尺寸對齊保護 (v3.1 stable iteration)：
         1. 若 x_up 較小 (diff > 0) -> 使用 Padding
         2. 若 x_up 較大 (diff < 0) -> 使用 Center Crop
         3. 最後加入 Assert 保險
@@ -111,7 +117,7 @@ class AttentionUNet(nn.Module):
                 x_start = crop_x // 2
                 x_up = x_up[:, :, y_start:y_start + x_skip.size()[2], x_start:x_start + x_skip.size()[3]]
 
-        # v3.1 Final 斷言保護
+        # v3.1 stable iteration: alignment sanity-check
         assert x_skip.shape[2:] == x_up.shape[2:], \
             f"Size mismatch after alignment: skip {x_skip.shape[2:]} vs up {x_up.shape[2:]}"
 

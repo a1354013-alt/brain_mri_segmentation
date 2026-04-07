@@ -1,10 +1,17 @@
-torch
-torchvision
-torchaudio
-numpy
-nibabel
-scikit-image
-tqdm
-matplotlib
-tensorboard
-kaggle
+# Recommended Python: 3.10 or 3.11
+#
+# Note: PyTorch wheels often lag behind the newest Python versions.
+# If you are on Python 3.13+, consider creating a 3.10/3.11 env first.
+
+numpy>=1.24,<3
+nibabel>=5.2,<6
+scikit-image>=0.21,<1
+tqdm>=4.66,<5
+matplotlib>=3.8,<4
+tensorboard>=2.16,<3
+kaggle>=1.6,<2
+
+# Torch stack (install CUDA variants as appropriate for your machine).
+torch>=2.2; python_version < "3.13"
+torchvision>=0.17; python_version < "3.13"
+torchaudio>=2.2; python_version < "3.13"

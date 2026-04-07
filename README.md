@@ -1,98 +1,154 @@
-# Brain MRI Tumor Segmentation (Attention U-Net)
-## v3.1 Final Release
+﻿# Brain MRI Tumor Segmentation (BraTS, 2D Slice, Attention U-Net)
 
-基於 **Attention U-Net** 的腦部 MRI 腫瘤分割專案，支援不確定性估計、極致記憶體優化與工業級魯棒性的資料處理流程。
+Version: v3.1 stable iteration
 
----
+This repository is a compact, CLI-driven project for brain tumor segmentation on the BraTS-style dataset.
+It trains a 2D slice model (Attention U-Net) and supports MC Dropout uncertainty during inference.
 
-## 📋 專案更新亮點
+This is not a production pipeline. The goal is: stable CLI flows, predictable data validation, and a clean delivery.
 
-### v3.1
-- 修正 smoke_test import 順序問題
-- 改善 prepared_cache missing log 檔名策略
-- 修正 validation progress bar dice 顯示
-- 完成全專案版本標示同步
+## What This Project Does
 
-### v3.0
-- 移除 hot path import
-- prepared_cache 無有效 PID 時改為 raise ValueError
-- 新增 smoke test
+- Train: `python main.py train`
+- Inference: `python main.py infer [--patient_id <pid>] [--uncertainty var|entropy]`
+- Demo (1-epoch quick run on 2 auto-selected patients): `python main.py demo`
+- Optional 3D NIfTI export during infer: `--save_nifti` and `--save_prob`
 
-### v2.9
-- prepared_cache 子集化
-- proxy_cache None 防護
+## Dataset Layout
 
-### v2.8
-- 極致記憶體優化
-- 快取安全子集化
+Expected directory structure:
 
-### v2.7
-- 修正快取共享子集化錯誤
-
----
-
-## 🏗️ 技術細節
-
-### 1. 極致記憶體優化
-透過 `np.asarray(mask_proxy.dataobj[:, :, i])` 逐切片讀取 NIfTI 檔案，避免了 `get_fdata()` 造成的記憶體膨脹，確保在處理大規模資料集時依然穩定。
-
-### 2. 快取共享子集化
-透過 `BraTSDataset(..., prepared_cache=shared_cache)` 初始化時，Dataset 會遍歷 `patient_ids` 並僅從 `shared_cache` 中提取存在的 Metadata，實現高效且正確的資料切分。
-
-### 3. 尺寸對齊保護
-模型內建 `_align_and_concat` 邏輯，自動處理 Padding 與 Center Crop，確保 Encoder 與 Decoder 特徵圖完美對齊。
-
----
-
-## 🚀 執行指令
-
-### 1. 資料準備
-```bash
-# 自動下載、解壓、對齊並處理衝突
-python scripts/download_brats.py --auto
+```
+data/Brats/<patient_id>/
+  <patient_id>_flair.nii.gz
+  <patient_id>_t1.nii.gz
+  <patient_id>_t1ce.nii.gz
+  <patient_id>_t2.nii.gz
+  <patient_id>_seg.nii.gz
 ```
 
-### 2. 冒煙測試
-Before running the smoke test, install dependencies:
+Helper script:
+
+- `python scripts/download_brats.py --auto` optionally downloads via Kaggle API.
+- The script validates and aligns extracted structures to `data/Brats/<pid>/...`.
+
+Notes:
+
+- `scripts/download_brats.py` uses lazy import for `kaggle` so local helpers and unit tests do not require Kaggle auth.
+
+## Install
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**Note:** This project requires Python 3.9+ and can run smoke tests and demos on CPU without a dedicated GPU.
+Dev tools:
 
 ```bash
-# 驗證核心流程 (Dataset, Model, Inference) 是否正常
-python tests/smoke_test.py
+pip install -r requirements-dev.txt
 ```
 
-### 3. 訓練與推論
+## Dependency Notes (Flexibility)
+
+- `infer` and dataset scanning require `nibabel` (and `numpy`).
+- `demo` uses the training stack (`train.py` / `Trainer`) so it requires the same core dependencies as training.
+- TensorBoard logging is optional: if `tensorboard` is not installed, training/demo will fall back to a no-op writer.
+- Ruff lint is only verifiable in an environment where `ruff` is installable/available.
+- Smoke test requires `torch`.
+
+## CLI Usage
+
+Train:
+
 ```bash
-# 訓練 (驗證集與訓練集真正分離)
 python main.py train
+```
 
-# 推論 (輕量化驗證，秒級啟動)
+Inference:
+
+```bash
 python main.py infer --uncertainty entropy
+python main.py infer --patient_id Patient_001 --uncertainty var
+```
 
-# Demo (路徑統一管理)
+Inference with 3D NIfTI outputs:
+
+```bash
+python main.py infer --patient_id Patient_001 --save_nifti --save_prob
+```
+
+Demo:
+
+```bash
 python main.py demo
 ```
 
----
+### Patient Validation Behavior (infer/demo auto-selection)
 
-## 📁 專案結構
+Auto-selection uses a two-phase strategy:
+
+1. Fast check: file presence + NIfTI readability + shape consistency + sampled tumor slices
+2. Strict check: full seg scan for tumor presence (only for candidates that pass phase 1)
+
+This reduces false negatives while avoiding a full scan over every patient.
+
+## Uncertainty (MC Dropout)
+
+MC Dropout runs multiple stochastic forward passes with dropout enabled.
+
+- `method=var`: pixel-wise variance across samples
+- `method=entropy`: predictive entropy computed from the mean probability
+
+## Models
+
+- Primary model used by CLI: `models/attention_unet.py` (`AttentionUNet`)
+- Baseline / legacy comparison: `models/unet.py` (`UNet`)
+
+## Tests
+
+This repo uses `unittest` for lightweight integration tests (no dataset required).
+
+| Test / Command | Requires dataset | Requires extra deps | What it covers |
+| --- | --- | --- | --- |
+| `python tests/smoke_test.py` | No | torch | Model init + one forward pass (fast) |
+| `python -m unittest -q tests.test_download_brats` | No | None | `check_data_exists()` correctness on empty/partial/complete layouts |
+| `python -m unittest -q tests.test_cli_integration` | No | None (stubbed) | CLI boundaries: train split protections, infer not importing training deps, device override, `--save_nifti` branch, demo empty dataset safe exit |
+| `python main.py train` | Yes | torch, nibabel, etc. | End-to-end data scan, split, training loop |
+| `python main.py infer --patient_id <pid>` | Yes | torch, nibabel, matplotlib | End-to-end single-patient infer + PNG |
+| `python main.py infer --save_nifti` | Yes | torch, nibabel | 3D NIfTI export branch |
+
+## Lint
+
+Ruff configuration lives in `pyproject.toml`.
+
+```bash
+ruff check . --fix
+ruff format .
 ```
-brain_mri_segmentation/
-├── config.py              # 核心配置
-├── main.py                # CLI 入口
-├── train.py               # 訓練邏輯
-├── models/
-│   └── attention_unet.py  # 具備斷言保護的模型
-├── utils/
-│   ├── dataset.py         # 極致記憶體優化與防呆實作
-│   └── visualize.py       # Alpha Blending 視覺化
-├── scripts/
-│   └── download_brats.py  # 強化版下載與衝突處理腳本
-└── tests/
-    └── smoke_test.py      # 核心流程冒煙測試
+
+## Clean Delivery Zip
+
+To build a clean source zip that excludes local artifacts (for example `.git/`, `__pycache__/`, `outputs/`, `data/`):
+
+```bash
+python scripts/make_release_zip.py --out brain_mri_segmentation_src.zip
 ```
+
+## Windows Notes
+
+Some environments block writing `__pycache__` or use legacy terminal encodings.
+`sitecustomize.py` is opt-in via env flags:
+
+```powershell
+$env:BMS_DONT_WRITE_BYTECODE = "1"
+$env:BMS_FORCE_UTF8 = "1"
+python main.py infer
+```
+
+By default, `sitecustomize.py` does nothing unless these environment variables are set.
+
+## Known Limitations
+
+- Training is slice-based (2D). It is not a full BraTS 3D pipeline with official challenge metrics.
+- Dataset length is per-patient (each epoch samples one slice per patient). This is intentional for speed and simplicity.
+- True end-to-end verification requires a real BraTS dataset present in `data/Brats/`.
