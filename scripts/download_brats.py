@@ -1,11 +1,3 @@
-"""
-BraTS Dataset Download Helper Script
-with Robust Error Handling.
-
-Used to automatically detect downloaded BraTS archives
-and reorganize them into the project dataset structure.
-"""
-
 import argparse
 import shutil
 import zipfile
@@ -115,11 +107,21 @@ def print_download_instructions():
     print("\n" + "=" * 70)
     print("📦 BraTS Dataset Download Instructions (v3.1 Final)")
     print("=" * 70 + "\n")
-print(f"方法 1: 官方網站下載 ({OFFICIAL_DOWNLOAD_URL})")
-print(f"方法 2: Kaggle API 下載 (kaggle datasets download -d {KAGGLE_DATASET_SLUG})")
+
+    print(f"方法 1: 官方網站下載 ({OFFICIAL_DOWNLOAD_URL})")
+    print(f"方法 2: Kaggle API 下載 (kaggle datasets download -d {KAGGLE_DATASET_SLUG})")
+
     print("\n資料集結構應如下:")
-    print("data/Brats/Patient_XXX/...")
-    print("=" * 70 + "\n")
+    print("data/Brats/")
+    print("  ├── Patient_001/")
+    print("  │     ├── Patient_001_flair.nii.gz")
+    print("  │     ├── Patient_001_t1.nii.gz")
+    print("  │     ├── Patient_001_t1ce.nii.gz")
+    print("  │     ├── Patient_001_t2.nii.gz")
+    print("  │     └── Patient_001_seg.nii.gz")
+
+    print("\n下載完成後重新執行本程式。")
+    print("=" * 70)
 
 
 def auto_download_kaggle(data_dir: Path):
