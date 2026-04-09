@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -95,9 +96,6 @@ def main() -> None:
             continue
         try:
             if p.is_dir():
-                # dist/pycacheprefix and other dirs are not part of delivery.
-                import shutil
-
                 shutil.rmtree(p, ignore_errors=True)
             else:
                 p.unlink(missing_ok=True)

@@ -42,8 +42,8 @@ Recommended Python:
 
 - Python 3.10 or 3.11 is recommended for stable PyTorch/scientific stack installs.
 - Python 3.13+ is treated as high risk in this project:
-  - Some unit tests may still pass (depending on stubs and local environment).
-  - The full CLI (`python main.py train|infer|demo`) will exit early with a clear message, because PyTorch/scientific
+  - Some lightweight/unit tests may still pass (depending on stubs and local environment).
+  - The full CLI (`python main.py train|infer|demo`) exits early with a clear message, because PyTorch/scientific
     stack support can lag behind new Python releases.
 
 ```bash
@@ -141,7 +141,7 @@ This repo uses `unittest` for lightweight integration tests (no dataset required
 | `python tests/smoke_test.py` | No | torch | Model init + one forward pass (fast) |
 | `python -m unittest -q tests.test_download_brats` | No | None | `check_data_exists()` correctness on empty/partial/complete layouts |
 | `python -m unittest -q tests.test_cli_integration` | No | None (stubbed) | CLI boundaries: train split protections, infer not importing training deps, device override, `--save_nifti` branch, demo empty dataset safe exit |
-| `python -m compileall -q .` | No | None | Syntax-level compile check (project shim prevents writing `.pyc` files) |
+| `python -m compileall -q .` | No | None | Syntax-level compile check (repo-local `py_compile.py` shim avoids writing `.pyc` files) |
 | `python main.py train` | Yes | torch, nibabel, etc. | End-to-end data scan, split, training loop |
 | `python main.py infer --patient_id <pid>` | Yes | torch, nibabel, matplotlib | End-to-end single-patient infer + PNG |
 | `python main.py infer --save_nifti` | Yes | torch, nibabel | 3D NIfTI export branch |
@@ -185,6 +185,13 @@ python scripts/clean_project.py --clean-dist
 
 ```bash
 python scripts/make_release_zip.py --out brain_mri_segmentation_src.zip
+```
+
+For stricter pre-delivery checks (useful in CI or a clean local environment), use:
+
+```bash
+python scripts/clean_project.py --clean-dist --strict
+python scripts/make_release_zip.py --out brain_mri_segmentation_src.zip --strict
 ```
 
 ## Windows Notes

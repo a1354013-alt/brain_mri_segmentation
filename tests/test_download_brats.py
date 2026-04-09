@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from typing import Iterable
 from unittest.mock import patch
 
-
 from scripts.download_brats import check_data_exists
 
 

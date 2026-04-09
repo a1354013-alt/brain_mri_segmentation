@@ -1,10 +1,11 @@
 """
-Visualization utilities with Alpha Blending and MC Dropout (v3.1 stable iteration).
+Visualization utilities for qualitative segmentation review and MC Dropout uncertainty.
 """
 
 from __future__ import annotations
+
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import numpy as np
 import torch
@@ -14,9 +15,7 @@ import config
 
 
 def enable_dropout(model: nn.Module) -> None:
-    """
-    只將 nn.Dropout 與 nn.Dropout2d 設為 train 模式 (v3.1 stable iteration)
-    """
+    """Enable dropout layers during evaluation for MC Dropout inference."""
     for module in model.modules():
         if isinstance(module, (nn.Dropout, nn.Dropout2d)):
             module.train()
@@ -28,10 +27,8 @@ def mc_dropout_inference(
     n_iterations: int = config.MC_ITERATIONS,
     device: Optional[torch.device] = None,
     method: str = "var",
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    MC Dropout 推論 (v3.1 stable iteration)
-    """
+) -> tuple[np.ndarray, np.ndarray]:
+    """Run MC Dropout inference and return `(prediction, uncertainty)` arrays."""
     if device is None:
         device = config.DEVICE
 
@@ -45,15 +42,13 @@ def mc_dropout_inference(
             output = torch.sigmoid(model(image_tensor))
             preds.append(output.cpu().numpy())
 
-    preds = np.array(preds)  # (N, B, C, H, W)
+    preds = np.array(preds)
     mean_pred = np.mean(preds, axis=0)
 
     if method == "entropy":
-        # Predictive Entropy: -p*log(p) - (1-p)*log(1-p)
         p = np.clip(mean_pred, 1e-8, 1.0 - 1e-8)
         uncertainty = -(p * np.log(p) + (1 - p) * np.log(1 - p))
     else:
-        # Variance
         uncertainty = np.var(preds, axis=0)
 
     prediction = (mean_pred > config.THRESHOLD).astype(np.float32)
@@ -68,9 +63,7 @@ def plot_results_with_uncertainty(
     save_path: Optional[Path] = None,
     title: str = "Brain MRI Tumor Segmentation",
 ) -> None:
-    """
-    視覺化結果：原圖、GT、預測、不確定性、疊加圖 (v3.1 stable iteration)
-    """
+    """Render MRI, ground truth, prediction, uncertainty, and overlay panels."""
     try:
         import matplotlib.pyplot as plt  # type: ignore
     except Exception as e:
@@ -96,15 +89,11 @@ def plot_results_with_uncertainty(
     axes[3].axis("off")
     plt.colorbar(im, ax=axes[3], fraction=0.046, pad=0.04)
 
-    # Overlay (v3.1 stable iteration: alpha blending)
     img_norm = (image[0] - image[0].min()) / (image[0].max() - image[0].min() + 1e-8)
     overlay = np.stack([img_norm] * 3, axis=-1)
-
-    # 建立紅色遮罩
     red_mask = np.zeros_like(overlay)
     red_mask[prediction[0] > 0, 0] = 1.0
 
-    # Alpha Blending: 僅在預測區域進行混合
     alpha = config.OVERLAY_ALPHA
     mask_idx = prediction[0] > 0
     overlay[mask_idx] = (1 - alpha) * overlay[mask_idx] + alpha * red_mask[mask_idx]

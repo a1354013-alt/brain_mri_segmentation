@@ -114,7 +114,7 @@ def dice_coeff(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
 
 class DiceLoss(nn.Module):
     def __init__(self):
-        super(DiceLoss, self).__init__()
+        super().__init__()
 
     def forward(self, inputs: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         inputs = torch.sigmoid(inputs)
@@ -296,7 +296,7 @@ class Trainer:
                 self._saved_best_without_val = True
                 self.save_checkpoints(epoch, val_dice, is_best=True)
 
-            # 每一輪都更新最後一份保險
+            # Always keep an explicit "last" checkpoint, even when no new best model is found.
             self.save_checkpoints(epoch, val_dice, is_best=False)
 
         self.save_log()

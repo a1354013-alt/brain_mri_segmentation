@@ -1,12 +1,11 @@
 """
-BraTS Dataset with extreme memory optimization, shared cache subsetting, and robust error handling
-(v3.1 stable iteration)
+BraTS dataset utilities with memory-aware scanning and robust validation.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import nibabel as nib
 import numpy as np
@@ -21,7 +20,7 @@ class BraTSDataset(Dataset):
     def __init__(
         self,
         data_dir: Path,
-        patient_ids: List[str],
+        patient_ids: list[str],
         image_size: int = 128,
         mode: str = "train",
         prepared_cache: Optional[dict] = None,
@@ -33,51 +32,51 @@ class BraTSDataset(Dataset):
         self.mode = mode
         self.output_dir = output_dir or config.OUTPUT_DIR
 
-        self.valid_patient_ids = []
-        self.patient_cache = {}
-        self.proxy_cache = {}
+        self.valid_patient_ids: list[str] = []
+        self.patient_cache: dict = {}
+        self.proxy_cache: dict = {}
 
         if prepared_cache:
-            # 強化快取共享子集化邏輯，確保安全性與分離
-            cache_valid = prepared_cache.get("valid_patient_ids", [])
-            cache_data = prepared_cache.get("patient_cache", {})
-            cache_proxy = prepared_cache.get("proxy_cache", {})
-
-            missing_in_cache = []
-            for pid in patient_ids:
-                # 更保守的檢查，避免 KeyError
-                data = cache_data.get(pid)
-                if pid in cache_valid and data is not None:
-                    self.valid_patient_ids.append(pid)
-                    self.patient_cache[pid] = data
-
-                    # 只有當 proxy_bundle 不為 None 時才放入，避免 getitem 崩潰
-                    if config.USE_PROXY_CACHE:
-                        proxy_bundle = cache_proxy.get(pid)
-                        if proxy_bundle is not None:
-                            self.proxy_cache[pid] = proxy_bundle
-                else:
-                    missing_in_cache.append(pid)
-
-            # 統一輸出快取缺失摘要，並寫入對應的 output_dir
-            if missing_in_cache:
-                n_missing = len(missing_in_cache)
-                print(f"Warning: Prepared cache missing {n_missing} patients from provided list.")
-                print(f"Showing first 10 missing: {missing_in_cache[:10]}")
-
-                # This file stores only the latest missing records for the given mode.
-                # It is intentionally overwritten each run to keep logs concise.
-                log_path = self.output_dir / f"prepared_cache_missing_{self.mode}.txt"
-                self.output_dir.mkdir(parents=True, exist_ok=True)
-                with open(log_path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(missing_in_cache))
-                print(f"Full missing list saved to {log_path}")
-
-            if not self.valid_patient_ids:
-                # 改為 raise ValueError 以利 CI/自動化流程抓錯
-                raise ValueError("Error: No valid patients in provided patient_ids after filtering prepared_cache.")
+            self._load_prepared_cache(prepared_cache)
         else:
             self._prepare_dataset()
+
+    def _load_prepared_cache(self, prepared_cache: dict) -> None:
+        """
+        Filter a prepared cache down to the requested patient ids.
+
+        This is used only when an external caller has already scanned the dataset and wants
+        to subset the cache safely. Missing patient ids are logged for debugging.
+        """
+        cache_valid = prepared_cache.get("valid_patient_ids", [])
+        cache_data = prepared_cache.get("patient_cache", {})
+        cache_proxy = prepared_cache.get("proxy_cache", {})
+
+        missing_in_cache: list[str] = []
+        for pid in self.patient_ids:
+            data = cache_data.get(pid)
+            if pid in cache_valid and data is not None:
+                self.valid_patient_ids.append(pid)
+                self.patient_cache[pid] = data
+
+                if config.USE_PROXY_CACHE:
+                    proxy_bundle = cache_proxy.get(pid)
+                    if proxy_bundle is not None:
+                        self.proxy_cache[pid] = proxy_bundle
+            else:
+                missing_in_cache.append(pid)
+
+        if missing_in_cache:
+            print(f"Warning: Prepared cache missing {len(missing_in_cache)} patients from provided list.")
+            print(f"Showing first 10 missing: {missing_in_cache[:10]}")
+            log_path = self.output_dir / f"prepared_cache_missing_{self.mode}.txt"
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(missing_in_cache))
+            print(f"Full missing list saved to {log_path}")
+
+        if not self.valid_patient_ids:
+            raise ValueError("Error: No valid patients in provided patient_ids after filtering prepared_cache.")
 
     @staticmethod
     def _pick_stat_slices(n_slices: int, k: int) -> list[int]:
@@ -90,10 +89,7 @@ class BraTSDataset(Dataset):
 
     @staticmethod
     def _estimate_norm_stats(proxy, slice_indices: list[int]) -> dict:
-        """
-        Estimate robust normalization stats from a small set of slices.
-        Returns dict with p1, p99, mean, std.
-        """
+        """Estimate robust normalization stats from a small set of slices."""
         if not slice_indices:
             return {}
         vals = []
@@ -103,15 +99,19 @@ class BraTSDataset(Dataset):
         flat = np.concatenate(vals, axis=0)
         p1, p99 = np.percentile(flat, [1, 99])
         clipped = np.clip(flat, p1, p99)
-        mean = float(np.mean(clipped))
-        std = float(np.std(clipped))
-        return {"p1": float(p1), "p99": float(p99), "mean": mean, "std": std}
+        return {
+            "p1": float(p1),
+            "p99": float(p99),
+            "mean": float(np.mean(clipped)),
+            "std": float(np.std(clipped)),
+        }
 
     def _prepare_dataset(self) -> None:
         """
-        掃描資料夾並預先計算切片索引 (真正逐切片掃描，極致節省記憶體)
+        Scan the requested patients, validate shapes, find tumor slices, and build
+        lightweight cache metadata.
         """
-        skipped_patients = []
+        skipped_patients: list[str] = []
         print(f"Scanning {len(self.patient_ids)} patients for {self.mode}...")
 
         for pid in self.patient_ids:
@@ -125,18 +125,17 @@ class BraTSDataset(Dataset):
                 continue
 
             try:
-                # 真正逐切片掃描，不將整個 3D Volume 載入記憶體
                 mask_proxy = nib.load(str(files["seg"]))
                 shape = mask_proxy.header.get_data_shape()
                 if len(shape) != 3:
                     skipped_patients.append(f"BadSegDim: {pid} ({shape})")
                     continue
-                n_slices = shape[2]
+
+                n_slices = int(shape[2])
                 if n_slices <= 0:
                     skipped_patients.append(f"BadSegShape: {pid} ({shape})")
                     continue
 
-                # Validate modality shapes match seg shape up front.
                 modality_shapes_ok = True
                 for mod in modalities:
                     try:
@@ -154,9 +153,8 @@ class BraTSDataset(Dataset):
 
                 tumor_counts = []
                 for i in range(n_slices):
-                    # 直接從 proxy.dataobj 讀取單一切片，極致節省 RAM
                     slice_data = np.asarray(mask_proxy.dataobj[:, :, i])
-                    tumor_counts.append(np.count_nonzero(slice_data > 0))
+                    tumor_counts.append(int(np.count_nonzero(slice_data > 0)))
 
                 tumor_slice_indices = [i for i, count in enumerate(tumor_counts) if count > 0]
                 non_tumor_slice_indices = [i for i, count in enumerate(tumor_counts) if count == 0]
@@ -166,10 +164,8 @@ class BraTSDataset(Dataset):
                     continue
 
                 val_best_slice_idx = int(np.argmax(tumor_counts))
-
-                # Estimate per-patient normalization stats (per modality) using a small slice subset.
                 stat_slices = self._pick_stat_slices(n_slices, int(config.STATS_N_SLICES))
-                norm_stats = {}
+                norm_stats: dict = {}
 
                 self.valid_patient_ids.append(pid)
                 self.patient_cache[pid] = {
@@ -180,7 +176,6 @@ class BraTSDataset(Dataset):
                     "norm_stats": norm_stats,
                 }
 
-                # 若開啟 Proxy 快取，則快取 nibabel 對象以提升 I/O 效能
                 if config.USE_PROXY_CACHE:
                     self.proxy_cache[pid] = {mod: nib.load(str(files[mod])) for mod in modalities}
                     self.proxy_cache[pid]["seg"] = mask_proxy
@@ -192,7 +187,7 @@ class BraTSDataset(Dataset):
                         norm_stats[mod] = self._estimate_norm_stats(proxy, stat_slices)
 
             except Exception as e:
-                skipped_patients.append(f"ReadError: {pid} ({str(e)})")
+                skipped_patients.append(f"ReadError: {pid} ({e})")
 
         if skipped_patients:
             print(f"Warning: Skipped {len(skipped_patients)} patients. (First 10 shown in log)")
@@ -218,12 +213,13 @@ class BraTSDataset(Dataset):
     ) -> bool:
         """
         Lightweight validation for CLI selection.
-        - Verifies files exist
-        - Verifies NIfTI headers are readable
-        - Verifies all modalities share the same 3D shape as seg
-        - Optionally checks seg has at least one non-zero voxel (require_tumor=True)
-          - strict_tumor_check=False: sample a few slices (fast, may miss rare cases)
-          - strict_tumor_check=True: scan the full volume slice-by-slice (slower, more reliable)
+
+        Checks:
+        - file presence
+        - NIfTI readability
+        - 3D shape validity
+        - modality/seg shape consistency
+        - optional tumor presence
         """
         p_dir = data_dir / pid
         modalities = ["flair", "t1", "t1ce", "t2"]
@@ -251,14 +247,12 @@ class BraTSDataset(Dataset):
                     return False
                 has_tumor = False
                 if strict_tumor_check:
-                    # Full scan, but still memory-safe via slice proxy reads.
                     for i in range(z):
                         sl = np.asarray(seg_img.dataobj[:, :, i])
                         if np.any(sl > 0):
                             has_tumor = True
                             break
                 else:
-                    # Sample a few slices to avoid a full scan.
                     sample_idx = sorted(set([0, z // 2, max(0, z - 1)]))
                     for i in sample_idx:
                         sl = np.asarray(seg_img.dataobj[:, :, i])
@@ -295,7 +289,6 @@ class BraTSDataset(Dataset):
         norm_stats = cache.get("norm_stats", {}) or {}
 
         for mod in modalities:
-            # 強化防呆檢查，確保 proxy_cache[pid] 存在且不為 None
             proxy_bundle = self.proxy_cache.get(pid)
             if config.USE_PROXY_CACHE and proxy_bundle is not None and mod in proxy_bundle:
                 proxy = proxy_bundle[mod]
@@ -315,15 +308,17 @@ class BraTSDataset(Dataset):
         mask_slice = np.asarray(seg_proxy.dataobj[:, :, slice_idx])
         mask_slice = (mask_slice > 0).astype(np.float32)
 
-        image_tensor = torch.from_numpy(np.stack(images, axis=0)).float()  # (C,H,W)
-        mask_tensor = torch.from_numpy(mask_slice).unsqueeze(0).float()  # (1,H,W)
+        image_tensor = torch.from_numpy(np.stack(images, axis=0)).float()
+        mask_tensor = torch.from_numpy(mask_slice).unsqueeze(0).float()
 
-        # Faster resize via torch.interpolate (vs skimage.transform.resize)
         if image_tensor.shape[-1] != self.image_size or image_tensor.shape[-2] != self.image_size:
-            image_tensor_b = image_tensor.unsqueeze(0)  # (1,C,H,W)
-            mask_tensor_b = mask_tensor.unsqueeze(0)  # (1,1,H,W)
+            image_tensor_b = image_tensor.unsqueeze(0)
+            mask_tensor_b = mask_tensor.unsqueeze(0)
             image_tensor_b = F.interpolate(
-                image_tensor_b, size=(self.image_size, self.image_size), mode="bilinear", align_corners=False
+                image_tensor_b,
+                size=(self.image_size, self.image_size),
+                mode="bilinear",
+                align_corners=False,
             )
             mask_tensor_b = F.interpolate(mask_tensor_b, size=(self.image_size, self.image_size), mode="nearest")
             image_tensor = image_tensor_b.squeeze(0)
@@ -334,7 +329,9 @@ class BraTSDataset(Dataset):
     def _normalize(self, img: np.ndarray, stats: Optional[dict] = None) -> np.ndarray:
         """
         Percentile clip + z-score normalization.
-        If per-patient stats are available, use them to avoid expensive percentile computation in __getitem__.
+
+        If per-patient stats are available, use them to avoid expensive percentile computation
+        in `__getitem__`.
         """
         img = img.astype(np.float32, copy=False)
         if stats and all(k in stats for k in ("p1", "p99", "mean", "std")):

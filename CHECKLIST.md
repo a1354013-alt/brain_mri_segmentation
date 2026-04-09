@@ -18,6 +18,9 @@ No dataset required:
 - `python tests/smoke_test.py`
 - `python -m unittest -q tests.test_download_brats`
 - `python -m unittest -q tests.test_cli_integration`
+- `python -m compileall -q .`
+- `python scripts/clean_project.py --clean-dist`
+- `python scripts/make_release_zip.py --out brain_mri_segmentation_src.zip`
 
 Requires dataset under `data/Brats/`:
 

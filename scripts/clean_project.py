@@ -1,11 +1,12 @@
 """
 Project cleanup utility.
 
-Removes Python bytecode caches that should never be part of a release artifact:
+Removes local artifacts that should never be part of a release artifact:
 - __pycache__ directories
 - *.pyc / *.pyo (including variant suffixes like *.pyc.*)
 - tests/_tmp* directories
 - repo-root *.zip files (old/manual zips)
+- dist non-deliverable artifacts (for example pycacheprefix or temp files)
 - optional: dist/*.zip (old release artifacts)
 
 Usage:
@@ -43,8 +44,10 @@ def _collect_artifacts(repo_root: Path):
     # dist should only contain release zip(s)
     dist_dir = repo_root / "dist"
     if dist_dir.exists():
-        artifacts.extend([p for p in dist_dir.glob("pycacheprefix") if p.exists()])
-        artifacts.extend([p for p in dist_dir.glob("_compile_tmp_*") if p.exists()])
+        for p in dist_dir.iterdir():
+            if p.is_file() and p.suffix.lower() == ".zip":
+                continue
+            artifacts.append(p)
     return artifacts
 
 
@@ -69,19 +72,24 @@ def main() -> None:
     removed = 0
     failed = 0
 
-    # dist/pycacheprefix and other non-deliverable dist artifacts should never persist.
+    # dist non-deliverable artifacts should never persist.
     dist_dir = repo_root / "dist"
-    dist_pycache = dist_dir / "pycacheprefix"
-    if dist_pycache.exists():
-        if args.dry_run:
-            print(f"[dry-run] rmtree {dist_pycache}")
-        else:
+    if dist_dir.exists():
+        for p in dist_dir.iterdir():
+            if p.is_file() and p.suffix.lower() == ".zip":
+                continue
+            if args.dry_run:
+                print(f"[dry-run] remove {p}")
+                continue
             try:
-                shutil.rmtree(dist_pycache, ignore_errors=False)
+                if p.is_dir():
+                    shutil.rmtree(p, ignore_errors=False)
+                else:
+                    p.unlink(missing_ok=True)
                 removed += 1
             except Exception as e:
                 failed += 1
-                print(f"Warning: failed to remove {dist_pycache}: {e}")
+                print(f"Warning: failed to remove {p}: {e}")
 
     # Remove known build/temp caches (best-effort).
     for d in [repo_root / ".pytest_cache", repo_root / ".mypy_cache", repo_root / ".ruff_cache", repo_root / "build"]:
@@ -135,24 +143,6 @@ def main() -> None:
             except Exception as e:
                 failed += 1
                 print(f"Warning: failed to remove {z}: {e}")
-
-        # Also remove any non-zip files/dirs left in dist/ (deliverable should be a single zip).
-        if dist_dir.exists():
-            for p in dist_dir.iterdir():
-                if p.is_file() and p.suffix.lower() == ".zip":
-                    continue
-                if args.dry_run:
-                    print(f"[dry-run] remove {p}")
-                    continue
-                try:
-                    if p.is_dir():
-                        shutil.rmtree(p, ignore_errors=False)
-                    else:
-                        p.unlink(missing_ok=True)
-                    removed += 1
-                except Exception as e:
-                    failed += 1
-                    print(f"Warning: failed to remove {p}: {e}")
 
     # Remove __pycache__ directories first (covers most pyc files).
     for d in repo_root.rglob("__pycache__"):

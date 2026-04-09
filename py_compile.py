@@ -1,22 +1,19 @@
 """
-Project-local `py_compile` shim (no bytecode writes).
+Project-local `py_compile` shim that performs syntax checks without writing bytecode.
 
 Why this exists:
-- Some Windows environments (AV / policy) block atomic renames and/or writing `.pyc` files, causing
-  `python -m compileall` / `python -m py_compile` to fail even when source code is valid.
-- This project uses compile checks as a *syntax verification* step only. Bytecode cache files are
-  not part of the deliverable and should not be created in the repo.
-
-Behavior:
-- `compile()` compiles source in-memory and never writes `.pyc` files.
-
-This keeps `compileall`/`py_compile` usable as a final verification step while maintaining a clean
-workspace and release boundary.
+- Some Windows environments (AV / policy) block atomic renames and/or writing `.pyc`
+  files, causing `python -m compileall` / `python -m py_compile` to fail even when
+  source code is valid.
+- This project uses compile checks as a syntax verification step only. Bytecode cache
+  files are not part of the deliverable and should not be created in the repo.
 """
 
 from __future__ import annotations
 
+import argparse
 import builtins
+import sys
 import tokenize
 from enum import Enum
 from pathlib import Path
@@ -37,7 +34,7 @@ class PyCompileError(Exception):
         return base
 
 
-def compile(  # noqa: A001 - match stdlib name
+def compile(  # noqa: A001 - keep stdlib-compatible API
     file: str,
     cfile: str | None = None,
     dfile: str | None = None,
@@ -46,7 +43,7 @@ def compile(  # noqa: A001 - match stdlib name
     **_kwargs,
 ):
     """
-    Compile `file` in-memory and return a plausible output path (without writing).
+    Compile `file` in-memory and return a plausible output path without writing `.pyc`.
     """
     path = Path(file)
     try:
@@ -65,3 +62,26 @@ class PycInvalidationMode(Enum):
     TIMESTAMP = "timestamp"
     CHECKED_HASH = "checked-hash"
     UNCHECKED_HASH = "unchecked-hash"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Syntax-check Python files without writing bytecode.")
+    parser.add_argument("files", nargs="+", help="Python source files to compile-check.")
+    parser.add_argument("-d", dest="dfile", default=None)
+    parser.add_argument("-O", dest="optimize", action="count", default=0)
+    args = parser.parse_args(argv)
+
+    optimize = int(args.optimize or 0)
+    failed = False
+    for file_name in args.files:
+        try:
+            compile(file_name, dfile=args.dfile, doraise=True, optimize=optimize)
+        except Exception as e:  # noqa: BLE001 - CLI parity with stdlib
+            print(e, file=sys.stderr)
+            failed = True
+
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
