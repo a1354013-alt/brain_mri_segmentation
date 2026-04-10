@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -75,6 +76,22 @@ def _match_any(rel_posix: str, patterns: list[str]) -> bool:
     return False
 
 
+def _get_git_dirty_files(repo_root: Path) -> list[str] | None:
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    except Exception:
+        return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Make a clean source zip for this repo.")
     parser.add_argument("--out", type=str, default="brain_mri_segmentation_src.zip")
@@ -82,6 +99,11 @@ def main() -> None:
         "--strict",
         action="store_true",
         help="Fail if dist/ contains non-deliverable artifacts that cannot be cleaned.",
+    )
+    parser.add_argument(
+        "--check-git",
+        action="store_true",
+        help="Warn if the git working tree is dirty; fail if --strict is also set.",
     )
     args = parser.parse_args()
 
@@ -114,6 +136,20 @@ def main() -> None:
         print("Suggested: python scripts/clean_project.py --clean-dist")
         if args.strict:
             raise SystemExit(2)
+
+    if args.check_git:
+        dirty_files = _get_git_dirty_files(repo_root)
+        if dirty_files is None:
+            print("Warning: Unable to determine git working tree cleanliness.")
+        elif dirty_files:
+            msg = "Warning: git working tree is dirty. Commit or stash changes before packaging."
+            if args.strict:
+                msg = msg.replace("Warning", "Error")
+            print(msg)
+            for entry in dirty_files:
+                print(f"  - {entry}")
+            if args.strict:
+                raise SystemExit(2)
 
     files = []
     for p in repo_root.rglob("*"):

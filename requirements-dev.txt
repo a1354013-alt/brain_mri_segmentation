@@ -1,3 +1,2 @@
 # Development-only dependencies
 ruff>=0.5,<1
-pytest>=8,<9

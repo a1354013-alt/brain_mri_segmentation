@@ -10,17 +10,22 @@ It is intentionally conservative and does not claim production readiness.
 - Inference can run without training-only deps being installed.
 - Repo hygiene: deliverable zip excludes local artifacts.
 - Release packaging is fixed: delivery zip is generated only via `python scripts/make_release_zip.py --out ...` (written under `dist/`).
+- Base requirements are intentionally separated from optional extras; install `requirements-optional.txt` only when Kaggle or TensorBoard support is needed.
 
 ## Verification Commands
 
 No dataset required:
 
 - `python tests/smoke_test.py`
-- `python -m unittest -q tests.test_download_brats`
-- `python -m unittest -q tests.test_cli_integration`
+- `python -m unittest -q tests.test_download_brats tests.test_cli_integration tests.test_release_and_clean`
 - `python -m compileall -q .`
 - `python scripts/clean_project.py --clean-dist`
 - `python scripts/make_release_zip.py --out brain_mri_segmentation_src.zip`
+
+Pre-release/CI-style strict mode:
+
+- `python scripts/clean_project.py --clean-dist --strict`
+- `python scripts/make_release_zip.py --out brain_mri_segmentation_src.zip --strict --check-git`
 
 Requires dataset under `data/Brats/`:
 

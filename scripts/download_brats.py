@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 import zipfile
 from pathlib import Path
 from typing import Optional
+
+import config
 
 KAGGLE_DATASET_SLUG = "awsaf49/brats20-dataset-training-validation"
 OFFICIAL_DOWNLOAD_URL = "https://www.med.upenn.edu/cbica/brats2020/data.html"
@@ -112,7 +115,7 @@ def check_data_exists(data_dir: Path) -> bool:
 
 def print_download_instructions() -> None:
     print("\n" + "=" * 70)
-    print("BraTS Dataset Download Instructions (v3.1 stable iteration)")
+    print(f"BraTS Dataset Download Instructions ({config.PROJECT_VERSION})")
     print("=" * 70 + "\n")
 
     print(f"Option 1: Official source ({OFFICIAL_DOWNLOAD_URL})")
@@ -132,7 +135,7 @@ def print_download_instructions() -> None:
 
 
 def auto_download_kaggle(data_dir: Path) -> bool:
-    print("\nStarting automatic download via Kaggle API (v3.1 stable iteration)...\n")
+    print(f"\nStarting automatic download via Kaggle API ({config.PROJECT_VERSION})...\n")
 
     try:
         import kaggle  # type: ignore
@@ -176,8 +179,13 @@ def auto_download_kaggle(data_dir: Path) -> bool:
         return False
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="BraTS Dataset Download Helper (v3.1 stable iteration)")
+def fail(message: str, exit_code: int = 1) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(exit_code)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=f"BraTS Dataset Download Helper ({config.PROJECT_VERSION})")
     parser.add_argument("--auto", action="store_true", help="Automatically download via Kaggle API")
     parser.add_argument("--data_dir", type=str, default="data/Brats", help="Data directory")
 
@@ -189,14 +197,16 @@ def main() -> None:
         try:
             validate_and_align_structure(data_path)
         except RuntimeError as e:
-            print(str(e))
-        return
+            fail(str(e), 2)
+        return 0
 
     if args.auto:
-        auto_download_kaggle(data_path)
+        if not auto_download_kaggle(data_path):
+            fail("Error: Automatic Kaggle download failed.", 2)
     else:
         print_download_instructions()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

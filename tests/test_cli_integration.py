@@ -56,6 +56,7 @@ def _make_numpy_stub():
 def _make_config_stub():
     cfg = types.ModuleType("config")
     cfg.PROJECT_ROOT = Path(".").resolve()
+    cfg.PROJECT_VERSION = "v3.1 stable iteration"
     cfg.DATA_DIR = Path("data/Brats")
     cfg.OUTPUT_DIR = Path("outputs")
 
@@ -294,7 +295,9 @@ class TestCliIntegration(unittest.TestCase):
         m.save_run_config = lambda *_args, **_kwargs: None
 
         args = types.SimpleNamespace(command="train", seed=None)
-        m.train_command(args)
+        with self.assertRaises(SystemExit) as cm:
+            m.train_command(args)
+        self.assertEqual(cm.exception.code, 1)
         self.assertEqual(len(calls.get("dataset_inits", [])), 0)
 
     def test_infer_does_not_import_train(self):
@@ -431,8 +434,91 @@ class TestCliIntegration(unittest.TestCase):
             neg_slice_prob=None,
             no_proxy_cache=False,
         )
-        m.demo_command(args)
+        with self.assertRaises(SystemExit) as cm:
+            m.demo_command(args)
+        self.assertEqual(cm.exception.code, 1)
         self.assertFalse(calls.get("trainer_train_called", False))
+
+    def test_infer_invalid_patient_id_fails_without_fallback(self):
+        calls = {}
+        m = import_main_with_stubs(include_train_module=False, calls=calls)
+        m.get_patient_ids = lambda _data_dir: ["bad", "good"]
+        m.quick_validate_two_phase = lambda pid, require_tumor: False
+
+        args = types.SimpleNamespace(
+            command="infer",
+            patient_id="bad",
+            uncertainty="var",
+            save_nifti=False,
+            save_prob=False,
+            device="cpu",
+            seed=None,
+            data_dir=None,
+            output_dir=None,
+            image_size=None,
+            batch_size=None,
+            epochs=None,
+            lr=None,
+            weight_decay=None,
+            num_workers=None,
+            mc_iterations=None,
+            neg_slice_prob=None,
+            no_proxy_cache=False,
+        )
+
+        with self.assertRaises(SystemExit) as cm:
+            m.infer_command(args)
+        self.assertEqual(cm.exception.code, 1)
+        self.assertNotIn("mc_dropout", calls)
+
+    def test_save_run_config_records_selected_patient(self):
+        import json
+        import tempfile
+
+        calls = {}
+        m = import_main_with_stubs(include_train_module=False, calls=calls)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            m.config.OUTPUT_DIR = Path(tmpdir)
+            args = types.SimpleNamespace(
+                command="infer",
+                patient_id="Patient_001",
+                uncertainty="var",
+                save_nifti=False,
+                save_prob=False,
+                device="cpu",
+                seed=None,
+                data_dir=None,
+                output_dir=None,
+                image_size=None,
+                batch_size=None,
+                epochs=None,
+                lr=None,
+                weight_decay=None,
+                num_workers=None,
+                mc_iterations=None,
+                neg_slice_prob=None,
+                no_proxy_cache=False,
+            )
+            m.save_run_config(
+                "infer",
+                args,
+                overrides_applied={"device": "cpu"},
+                model_info={"model_loaded": True, "weights_source": "random_init", "checkpoint_path": None},
+                selected_patient_id="Patient_001",
+                valid_patient_count=1,
+            )
+
+            config_files = list(Path(tmpdir).glob("run_config_infer.json"))
+            self.assertEqual(len(config_files), 1)
+            with open(config_files[0], "r", encoding="utf-8") as f:
+                payload = json.load(f)
+
+        self.assertEqual(payload["command"], "infer")
+        self.assertEqual(payload["selected_patient_id"], "Patient_001")
+        self.assertEqual(payload["valid_patient_count"], 1)
+        self.assertEqual(payload["project_version"], m.config.PROJECT_VERSION)
+        self.assertIn("python_version", payload)
 
 
 if __name__ == "__main__":

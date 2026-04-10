@@ -63,7 +63,9 @@ def run_smoke_test() -> None:
 
     from models import AttentionUNet
 
-    print("Running Smoke Test (v3.1 stable iteration)...", flush=True)
+    import config
+
+    print(f"Running Smoke Test ({config.PROJECT_VERSION})...", flush=True)
 
     # Best-effort: reduce CPU thread usage.
     try:

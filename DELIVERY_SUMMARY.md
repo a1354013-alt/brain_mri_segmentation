@@ -15,6 +15,8 @@
 - Device override correctness: CLI `--device` override is forwarded to MC Dropout inference.
 - Demo empty-dataset guard: demo exits safely if scanning yields 0 valid patients.
 - Download helper decoupling: `scripts/download_brats.py` uses lazy `kaggle` import so local helpers can be used without Kaggle auth.
+- Runtime version is centralized in `config.PROJECT_VERSION` for consistent CLI/info reporting.
+- Base dependencies are split from optional extras: `requirements.txt` is core runtime only; `requirements-optional.txt` contains Kaggle/TensorBoard.
 
 ## What We Can Automatically Verify (No Dataset Required)
 

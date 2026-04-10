@@ -50,6 +50,12 @@ Recommended Python:
 pip install -r requirements.txt
 ```
 
+Full optional extras (Kaggle auto-download / TensorBoard logging):
+
+```bash
+pip install -r requirements-optional.txt
+```
+
 Dev tools:
 
 ```bash
@@ -60,6 +66,7 @@ pip install -r requirements-dev.txt
 
 - `infer` and dataset scanning require `nibabel` (and `numpy`).
 - `demo` uses the training stack (`train.py` / `Trainer`) so it requires the same core dependencies as training.
+- `tensorboard` and `kaggle` are optional extras and are not required for the base install. Install `requirements-optional.txt` if you need those features.
 - TensorBoard logging is optional: if `tensorboard` is not installed, training/demo will fall back to a no-op writer.
 - Ruff lint is only verifiable in an environment where `ruff` is installable/available.
 - Smoke test requires `torch`.
@@ -90,10 +97,15 @@ Weights note:
 Each CLI command writes a JSON run config after preflight checks pass. The top-level schema is stable:
 
 - `timestamp`: ISO timestamp
+- `project_version`: Release version (e.g., "v3.1 stable iteration")
+- `python_version`: Python interpreter version
+- `git_commit_hash`: Current git commit hash (null if not in a git repo or git unavailable)
 - `command`: one of `train` / `infer` / `demo`
-- `args`: CLI args (whitelisted)
-- `overrides_applied`: explicit overrides applied to config
-- `config`: resolved config values (for reproducibility)
+- `selected_patient_id`: For infer; the specific patient used (null for train/demo)
+- `valid_patient_count`: Number of valid patients used in this run
+- `args`: CLI args (whitelisted user-provided overrides)
+- `overrides_applied`: Config values explicitly overridden from CLI args
+- `config`: Resolved config values (for reproducibility); includes IMAGE_SIZE, BATCH_SIZE, EPOCHS, LEARNING_RATE, WEIGHT_DECAY, NUM_WORKERS, DEVICE, RANDOM_SEED, MC_ITERATIONS, etc.
 - `model`:
   - `model_loaded`: true/false/null
   - `weights_source`: `best_model_state` / `checkpoint` / `random_init` / null
@@ -157,6 +169,8 @@ ruff format .
 
 ## Release Process
 
+**Important**: The working repository directory is **never** a valid deliverable. To create a proper release artifact:
+
 Official release artifacts must be generated via the release script. Do not manually zip the repo folder.
 
 To build a clean source zip that excludes local artifacts (for example `.git/`, `__pycache__/`, `outputs/`, `data/`,
@@ -173,7 +187,14 @@ Repository snapshot note:
 
 - A working repo may contain local artifacts or locked files (AV/policy), but these must never be treated as the official
   deliverable.
-- The only official deliverable is the release zip produced under `dist/` by `scripts/make_release_zip.py`.
+- The **only** official deliverable is the release zip under `dist/` produced by `scripts/make_release_zip.py`.
+- Do not distribute a zip of the entire working directory; do not include `.git/`, `outputs/`, `data/`, or other local state.
+
+Release script options:
+
+- `--out <name>`: Output zip filename (default: `brain_mri_segmentation_src.zip`)
+- `--strict`: Fail if dist/ contains non-deliverable artifacts that cannot be cleaned
+- `--check-git`: Warn if git working tree is dirty; fail if combined with `--strict`
 
 Release zip verification (no dataset required): run the script above and inspect `dist/brain_mri_segmentation_src.zip`.
 
@@ -191,7 +212,7 @@ For stricter pre-delivery checks (useful in CI or a clean local environment), us
 
 ```bash
 python scripts/clean_project.py --clean-dist --strict
-python scripts/make_release_zip.py --out brain_mri_segmentation_src.zip --strict
+python scripts/make_release_zip.py --out brain_mri_segmentation_src.zip --strict --check-git
 ```
 
 ## Windows Notes

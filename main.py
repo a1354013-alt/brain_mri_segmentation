@@ -8,7 +8,9 @@ import argparse
 import inspect
 import json
 import os
+import platform
 import random
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -104,12 +106,36 @@ def apply_overrides_from_args(args: argparse.Namespace) -> dict:
     return overrides_applied
 
 
+def _get_git_commit_hash() -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=config.PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        commit = result.stdout.strip()
+        return commit or None
+    except Exception:
+        return None
+
+
+def fail(message: str, exit_code: int = 1) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(exit_code)
+
+
 def save_run_config(
     command: str,
     args: argparse.Namespace,
     overrides_applied: dict,
     *,
     model_info: dict | None = None,
+    selected_patient_id: str | None = None,
+    valid_patient_count: int | None = None,
 ) -> None:
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -145,7 +171,12 @@ def save_run_config(
 
     payload = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "project_version": config.PROJECT_VERSION,
+        "python_version": platform.python_version(),
+        "git_commit_hash": _get_git_commit_hash(),
         "command": command,
+        "selected_patient_id": selected_patient_id,
+        "valid_patient_count": valid_patient_count,
         "args": args_payload,
         "overrides_applied": overrides_applied,
         "config": {
@@ -271,7 +302,7 @@ def enforce_python_version_policy(command: str | None) -> None:
 
 
 def train_command(args: argparse.Namespace) -> None:
-    print("\nTraining Mode (v3.1 stable iteration)")
+    print(f"\nTraining Mode ({config.PROJECT_VERSION})")
     overrides_applied = apply_overrides_from_args(args)
 
     from torch.utils.data import DataLoader
@@ -281,22 +312,19 @@ def train_command(args: argparse.Namespace) -> None:
     try:
         from utils import BraTSDataset
     except ModuleNotFoundError as e:
-        print(f"Error: Missing dependency: {e.name}. Install: pip install -r requirements.txt")
-        return
+        fail(f"Error: Missing dependency: {e.name}. Install: pip install -r requirements.txt", 2)
     except MemoryError:
-        print(
+        fail(
             "Error: Failed to import dataset utilities due to MemoryError. "
-            "Please use a less constrained environment."
+            "Please use a less constrained environment.",
+            2,
         )
-        return
 
     patient_ids = get_patient_ids(config.DATA_DIR)
     if len(patient_ids) == 0:
-        print("Error: No data found in DATA_DIR. Please run download script first.")
-        return
+        fail("Error: No data found in DATA_DIR. Please run download script first.", 1)
     if len(patient_ids) < 2:
-        print("Error: Need at least 2 patients to create a non-empty train/val split.")
-        return
+        fail("Error: Need at least 2 patients to create a non-empty train/val split.", 1)
 
     rnd = random.Random(int(config.RANDOM_SEED))
     rnd.shuffle(patient_ids)
@@ -327,13 +355,16 @@ def train_command(args: argparse.Namespace) -> None:
     )
 
     if len(train_dataset) == 0:
-        print("Error: Train dataset contains 0 valid patients after scanning. Check data integrity.")
-        return
+        fail("Error: Train dataset contains 0 valid patients after scanning. Check data integrity.", 1)
     if len(val_dataset) == 0:
-        print("Error: Val dataset contains 0 valid patients after scanning. Check data integrity or split seed.")
-        return
+        fail("Error: Val dataset contains 0 valid patients after scanning. Check data integrity or split seed.", 1)
 
-    save_run_config("train", args, overrides_applied=overrides_applied)
+    save_run_config(
+        "train",
+        args,
+        overrides_applied=overrides_applied,
+        valid_patient_count=len(train_dataset) + len(val_dataset),
+    )
 
     dl_kwargs = {
         "num_workers": int(config.NUM_WORKERS),
@@ -354,8 +385,7 @@ def train_command(args: argparse.Namespace) -> None:
     try:
         from train import Trainer
     except ModuleNotFoundError as e:
-        print(f"Error: Missing training dependency: {e.name}. Install: pip install -r requirements.txt")
-        return
+        fail(f"Error: Missing training dependency: {e.name}. Install: pip install -r requirements.txt", 2)
 
     trainer = Trainer(
         model=model,
@@ -376,14 +406,13 @@ def train_command(args: argparse.Namespace) -> None:
 
 
 def infer_command(args: argparse.Namespace) -> None:
-    print("\nInference Mode (v3.1 stable iteration)")
+    print(f"\nInference Mode ({config.PROJECT_VERSION})")
     overrides_applied = apply_overrides_from_args(args)
 
     try:
         import numpy as np
     except MemoryError:
-        print("Error: NumPy failed to import due to MemoryError. Please use a less constrained environment.")
-        return
+        fail("Error: NumPy failed to import due to MemoryError. Please use a less constrained environment.", 2)
 
     from models import AttentionUNet
 
@@ -396,22 +425,20 @@ def infer_command(args: argparse.Namespace) -> None:
             save_nifti_like,
         )
     except ModuleNotFoundError as e:
-        print(f"Error: Missing dependency: {e.name}. Install: pip install -r requirements.txt")
-        return
+        fail(f"Error: Missing dependency: {e.name}. Install: pip install -r requirements.txt", 2)
     except MemoryError:
-        print(
+        fail(
             "Error: Failed to import inference utilities due to MemoryError. "
-            "Please use a less constrained environment."
+            "Please use a less constrained environment.",
+            2,
         )
-        return
 
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
     model_info = load_model_weights(model, device=config.DEVICE)
 
     patient_ids = get_patient_ids(config.DATA_DIR)
     if len(patient_ids) == 0:
-        print("Error: No data found in DATA_DIR.")
-        return
+        fail("Error: No data found in DATA_DIR.", 1)
 
     target_patient = args.patient_id
     dataset = None
@@ -426,8 +453,7 @@ def infer_command(args: argparse.Namespace) -> None:
                 output_dir=config.OUTPUT_DIR,
             )
         else:
-            print(f"Warning: Patient {target_patient} is invalid. Searching for the first valid patient...")
-            target_patient = None
+            fail(f"Error: Patient {target_patient} is invalid, missing, or incompatible. Please provide a valid --patient_id.", 1)
 
     if target_patient is None:
         for pid in patient_ids:
@@ -444,10 +470,16 @@ def infer_command(args: argparse.Namespace) -> None:
                 break
 
     if dataset is None or len(dataset) == 0:
-        print("Error: No valid patients found in DATA_DIR.")
-        return
+        fail("Error: No valid patients found in DATA_DIR.", 1)
 
-    save_run_config("infer", args, overrides_applied=overrides_applied, model_info=model_info)
+    save_run_config(
+        "infer",
+        args,
+        overrides_applied=overrides_applied,
+        model_info=model_info,
+        selected_patient_id=target_patient,
+        valid_patient_count=len(dataset),
+    )
 
     image, mask = dataset[0]
     prediction, uncertainty = mc_dropout_inference(
@@ -488,7 +520,7 @@ def infer_command(args: argparse.Namespace) -> None:
 
 
 def demo_command(args: argparse.Namespace) -> None:
-    print("\nDemo Mode (v3.1 stable iteration)")
+    print(f"\nDemo Mode ({config.PROJECT_VERSION})")
     overrides_applied = apply_overrides_from_args(args)
 
     from torch.utils.data import DataLoader
@@ -498,16 +530,13 @@ def demo_command(args: argparse.Namespace) -> None:
     try:
         from utils import BraTSDataset, mc_dropout_inference, plot_results_with_uncertainty
     except ModuleNotFoundError as e:
-        print(f"Error: Missing dependency: {e.name}. Install: pip install -r requirements.txt")
-        return
+        fail(f"Error: Missing dependency: {e.name}. Install: pip install -r requirements.txt", 2)
     except MemoryError:
-        print("Error: Failed to import demo utilities due to MemoryError. Please use a less constrained environment.")
-        return
+        fail("Error: Failed to import demo utilities due to MemoryError. Please use a less constrained environment.", 2)
 
     patient_ids = get_patient_ids(config.DATA_DIR)
     if len(patient_ids) == 0:
-        print("Error: No data found in DATA_DIR.")
-        return
+        fail("Error: No data found in DATA_DIR.", 1)
 
     demo_ids = []
     for pid in patient_ids:
@@ -517,8 +546,7 @@ def demo_command(args: argparse.Namespace) -> None:
             break
 
     if not demo_ids:
-        print("Error: No valid patients found for Demo.")
-        return
+        fail("Error: No valid patients found for Demo.", 1)
 
     train_dataset = BraTSDataset(
         config.DATA_DIR,
@@ -528,10 +556,14 @@ def demo_command(args: argparse.Namespace) -> None:
         output_dir=config.DEMO_OUTPUT_DIR,
     )
     if len(train_dataset) == 0:
-        print("Error: Demo dataset contains 0 valid patients after scanning. Check data integrity.")
-        return
+        fail("Error: Demo dataset contains 0 valid patients after scanning. Check data integrity.", 1)
 
-    save_run_config("demo", args, overrides_applied=overrides_applied)
+    save_run_config(
+        "demo",
+        args,
+        overrides_applied=overrides_applied,
+        valid_patient_count=len(train_dataset),
+    )
     demo_loader = DataLoader(train_dataset, batch_size=1, num_workers=0, worker_init_fn=worker_init_fn)
 
     model = AttentionUNet(config.N_CHANNELS, config.N_CLASSES, config.DROPOUT_P).to(config.DEVICE)
@@ -539,8 +571,7 @@ def demo_command(args: argparse.Namespace) -> None:
     try:
         from train import Trainer
     except ModuleNotFoundError as e:
-        print(f"Error: Missing training dependency: {e.name}. Install: pip install -r requirements.txt")
-        return
+        fail(f"Error: Missing training dependency: {e.name}. Install: pip install -r requirements.txt", 2)
 
     trainer = Trainer(
         model=model,
@@ -572,8 +603,8 @@ def demo_command(args: argparse.Namespace) -> None:
     print(f"Demo completed. Results in {config.DEMO_OUTPUT_DIR}")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Brain MRI Segmentation (v3.1 stable iteration)")
+def main() -> int:
+    parser = argparse.ArgumentParser(description=f"Brain MRI Segmentation ({config.PROJECT_VERSION})")
     subparsers = parser.add_subparsers(dest="command")
 
     common = argparse.ArgumentParser(add_help=False)
@@ -613,6 +644,8 @@ def main() -> None:
     else:
         parser.print_help()
 
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

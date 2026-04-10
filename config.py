@@ -19,6 +19,9 @@ import torch
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "data" / "Brats"
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
+
+# Release / runtime metadata
+PROJECT_VERSION = "v3.1 stable iteration"
 CHECKPOINT_PATH = OUTPUT_DIR / "best_checkpoint.pth"
 LAST_CHECKPOINT_PATH = OUTPUT_DIR / "last_checkpoint.pth"
 MODEL_STATE_PATH = OUTPUT_DIR / "best_model_state.pth"

@@ -1,0 +1,5 @@
+# Optional extras for full dataset helpers and logging
+# Install only if you need Kaggle auto-download or TensorBoard logging.
+
+kaggle>=1.6,<2
+tensorboard>=2.16,<3
