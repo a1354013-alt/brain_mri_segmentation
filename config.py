@@ -1,5 +1,12 @@
 """
-Project configuration for Brain MRI Segmentation (v3.1 stable iteration).
+Project configuration for Brain MRI Segmentation (v4.0 missing-modality research platform).
+
+This version supports systematic research on missing modality scenarios for BraTS segmentation:
+- Full modalities baseline
+- Fixed missing single modality (FLAIR, T1, T1ce, or T2)
+- Random missing one modality
+- Optional random missing multiple modalities
+- Missing-aware model variants
 """
 
 from __future__ import annotations
@@ -21,7 +28,7 @@ DATA_DIR = PROJECT_ROOT / "data" / "Brats"
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 
 # Release / runtime metadata
-PROJECT_VERSION = "v3.1 stable iteration"
+PROJECT_VERSION = "v4.0 missing-modality research platform"
 CHECKPOINT_PATH = OUTPUT_DIR / "best_checkpoint.pth"
 LAST_CHECKPOINT_PATH = OUTPUT_DIR / "last_checkpoint.pth"
 MODEL_STATE_PATH = OUTPUT_DIR / "best_model_state.pth"
@@ -39,8 +46,24 @@ DEMO_LAST_MODEL_STATE_PATH = DEMO_OUTPUT_DIR / "last_model_state_demo.pth"
 DEMO_TENSORBOARD_DIR = DEMO_OUTPUT_DIR / "tensorboard"
 DEMO_LOG_FILE = DEMO_OUTPUT_DIR / "training_log_demo.csv"
 
+# Modalities
+MODALITIES = ["flair", "t1", "t1ce", "t2"]
+N_MODALITIES = len(MODALITIES)
+
+# Missing modality settings
+ENABLE_MISSING_MODALITY = False
+MISSING_MODALITY_POLICY = "none"  # Options: none, fixed, random_one, random_multi
+FIXED_MISSING_MODALITIES = []  # List of modality names to always drop (e.g., ["flair"])
+USE_MODALITY_MASK = False  # Whether to return/use modality_mask tensor
+
+# Model variant: baseline or missing_aware
+MODEL_VARIANT = "baseline"  # Options: baseline, missing_aware
+
+# Loss variant (extensible for future ablation studies)
+LOSS_VARIANT = "dice_bce"  # Options: dice_bce, dice, bce, focal (future)
+
 # Model
-N_CHANNELS = 4  # FLAIR, T1, T1ce, T2
+N_CHANNELS = N_MODALITIES  # FLAIR, T1, T1ce, T2 (or fewer if missing modality simulation)
 N_CLASSES = 1  # Binary segmentation (whole tumor vs background)
 DROPOUT_P = 0.2
 THRESHOLD = 0.5
@@ -159,6 +182,7 @@ def apply_overrides(**kwargs) -> None:
     if kwargs.get("device") is not None:
         set_device(str(kwargs["device"]))
 
+    # Core training/hyperparameters
     for key in [
         "IMAGE_SIZE",
         "BATCH_SIZE",
@@ -179,3 +203,20 @@ def apply_overrides(**kwargs) -> None:
     ]:
         if kwargs.get(key) is not None:
             globals()[key] = kwargs[key]
+
+    # Missing modality settings
+    for key in [
+        "ENABLE_MISSING_MODALITY",
+        "MISSING_MODALITY_POLICY",
+        "FIXED_MISSING_MODALITIES",
+        "USE_MODALITY_MASK",
+        "MODEL_VARIANT",
+        "LOSS_VARIANT",
+    ]:
+        if kwargs.get(key) is not None:
+            val = kwargs[key]
+            # Handle list conversion for FIXED_MISSING_MODALITIES
+            if key == "FIXED_MISSING_MODALITIES" and isinstance(val, str):
+                # Parse comma-separated string like "flair,t1ce" into list
+                val = [m.strip() for m in val.split(",") if m.strip()]
+            globals()[key] = val
