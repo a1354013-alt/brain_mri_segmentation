@@ -1,9 +1,13 @@
 """
 BraTS dataset utilities with memory-aware scanning and robust validation.
+
+Supports missing modality simulation for research on clinical scenarios where
+certain MRI modalities may be unavailable.
 """
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from typing import Optional
 
@@ -25,12 +29,33 @@ class BraTSDataset(Dataset):
         mode: str = "train",
         prepared_cache: Optional[dict] = None,
         output_dir: Optional[Path] = None,
+        enable_missing_modality: bool | None = None,
+        missing_modality_policy: str | None = None,
+        fixed_missing_modalities: list[str] | None = None,
+        use_modality_mask: bool | None = None,
+        random_seed: int | None = None,
     ):
         self.data_dir = data_dir
         self.patient_ids = patient_ids
         self.image_size = image_size
         self.mode = mode
         self.output_dir = output_dir or config.OUTPUT_DIR
+
+        # Missing modality settings (use config defaults if not specified)
+        self.enable_missing_modality = (
+            enable_missing_modality if enable_missing_modality is not None else config.ENABLE_MISSING_MODALITY
+        )
+        self.missing_modality_policy = (
+            missing_modality_policy if missing_modality_policy is not None else config.MISSING_MODALITY_POLICY
+        )
+        self.fixed_missing_modalities = (
+            fixed_missing_modalities if fixed_missing_modalities is not None else config.FIXED_MISSING_MODALITIES
+        )
+        self.use_modality_mask = use_modality_mask if use_modality_mask is not None else config.USE_MODALITY_MASK
+        
+        # Random state for reproducible missing modality simulation
+        self.random_seed = random_seed if random_seed is not None else config.RANDOM_SEED
+        self._rng = random.Random(self.random_seed)
 
         self.valid_patient_ids: list[str] = []
         self.patient_cache: dict = {}
@@ -42,12 +67,6 @@ class BraTSDataset(Dataset):
             self._prepare_dataset()
 
     def _load_prepared_cache(self, prepared_cache: dict) -> None:
-        """
-        Filter a prepared cache down to the requested patient ids.
-
-        This is used only when an external caller has already scanned the dataset and wants
-        to subset the cache safely. Missing patient ids are logged for debugging.
-        """
         cache_valid = prepared_cache.get("valid_patient_ids", [])
         cache_data = prepared_cache.get("patient_cache", {})
         cache_proxy = prepared_cache.get("proxy_cache", {})
@@ -89,7 +108,6 @@ class BraTSDataset(Dataset):
 
     @staticmethod
     def _estimate_norm_stats(proxy, slice_indices: list[int]) -> dict:
-        """Estimate robust normalization stats from a small set of slices."""
         if not slice_indices:
             return {}
         vals = []
@@ -107,16 +125,12 @@ class BraTSDataset(Dataset):
         }
 
     def _prepare_dataset(self) -> None:
-        """
-        Scan the requested patients, validate shapes, find tumor slices, and build
-        lightweight cache metadata.
-        """
         skipped_patients: list[str] = []
         print(f"Scanning {len(self.patient_ids)} patients for {self.mode}...")
 
         for pid in self.patient_ids:
             p_dir = self.data_dir / pid
-            modalities = ["flair", "t1", "t1ce", "t2"]
+            modalities = config.MODALITIES
             files = {mod: p_dir / f"{pid}_{mod}.nii.gz" for mod in modalities}
             files["seg"] = p_dir / f"{pid}_seg.nii.gz"
 
@@ -211,18 +225,8 @@ class BraTSDataset(Dataset):
         require_tumor: bool = False,
         strict_tumor_check: bool = False,
     ) -> bool:
-        """
-        Lightweight validation for CLI selection.
-
-        Checks:
-        - file presence
-        - NIfTI readability
-        - 3D shape validity
-        - modality/seg shape consistency
-        - optional tumor presence
-        """
         p_dir = data_dir / pid
-        modalities = ["flair", "t1", "t1ce", "t2"]
+        modalities = config.MODALITIES
         seg_path = p_dir / f"{pid}_seg.nii.gz"
         if not seg_path.exists():
             return False
@@ -269,26 +273,66 @@ class BraTSDataset(Dataset):
     def __len__(self) -> int:
         return len(self.valid_patient_ids)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def _sample_missing_modalities(self) -> list[bool]:
+        """Sample which modalities should be marked as missing.
+        
+        Returns a list of booleans indicating whether each modality is MISSING.
+        True = missing, False = present.
+        """
+        n_modalities = len(config.MODALITIES)
+        missing_flags = [False] * n_modalities
+        
+        if not self.enable_missing_modality or self.missing_modality_policy == "none":
+            return missing_flags
+        
+        policy = self.missing_modality_policy
+        
+        if policy == "fixed":
+            for i, mod in enumerate(config.MODALITIES):
+                if mod in self.fixed_missing_modalities:
+                    missing_flags[i] = True
+        elif policy == "random_one":
+            drop_idx = self._rng.randint(0, n_modalities - 1)
+            missing_flags[drop_idx] = True
+        elif policy == "random_multi":
+            n_to_drop = self._rng.randint(1, n_modalities - 1)
+            indices_to_drop = self._rng.sample(range(n_modalities), n_to_drop)
+            for idx in indices_to_drop:
+                missing_flags[idx] = True
+        
+        return missing_flags
+
+    def __getitem__(self, idx: int) -> dict:
+        """Get a single training/inference sample.
+        
+        Returns a dict with:
+        - image: tensor of shape (N, H, W) where N is number of modalities
+        - mask: segmentation mask tensor of shape (1, H, W)
+        - modality_mask: binary tensor of shape (N,) indicating present modalities (1=present)
+        - meta: dict with patient_id, slice_idx, and missing_flags
+        """
         pid = self.valid_patient_ids[idx]
         cache = self.patient_cache[pid]
 
         if self.mode == "train":
             tumor_idx = cache.get("tumor_slice_indices", [])
             non_tumor_idx = cache.get("non_tumor_slice_indices", [])
-            use_neg = (len(non_tumor_idx) > 0) and (np.random.rand() < float(config.NEG_SLICE_PROB))
+            use_neg = (len(non_tumor_idx) > 0) and (self._rng.random() < float(config.NEG_SLICE_PROB))
             pick_from = non_tumor_idx if use_neg else tumor_idx
             if not pick_from:
                 pick_from = tumor_idx or non_tumor_idx
-            slice_idx = int(np.random.choice(pick_from))
+            slice_idx = int(self._rng.choice(pick_from))
         else:
             slice_idx = cache["val_best_slice_idx"]
 
+        missing_flags = self._sample_missing_modalities()
+        modality_mask = torch.tensor([0.0 if m else 1.0 for m in missing_flags], dtype=torch.float32)
+
         images = []
-        modalities = ["flair", "t1", "t1ce", "t2"]
+        modalities = config.MODALITIES
         norm_stats = cache.get("norm_stats", {}) or {}
 
-        for mod in modalities:
+        for i, mod in enumerate(modalities):
             proxy_bundle = self.proxy_cache.get(pid)
             if config.USE_PROXY_CACHE and proxy_bundle is not None and mod in proxy_bundle:
                 proxy = proxy_bundle[mod]
@@ -296,6 +340,10 @@ class BraTSDataset(Dataset):
                 proxy = nib.load(cache["files"][mod])
 
             img_slice = np.asarray(proxy.dataobj[:, :, slice_idx])
+            
+            if missing_flags[i]:
+                img_slice = np.zeros_like(img_slice)
+            
             img_slice = self._normalize(img_slice, stats=norm_stats.get(mod))
             images.append(img_slice)
 
@@ -324,15 +372,18 @@ class BraTSDataset(Dataset):
             image_tensor = image_tensor_b.squeeze(0)
             mask_tensor = mask_tensor_b.squeeze(0)
 
-        return image_tensor, mask_tensor
+        return {
+            "image": image_tensor,
+            "mask": mask_tensor,
+            "modality_mask": modality_mask,
+            "meta": {
+                "patient_id": pid,
+                "slice_idx": slice_idx,
+                "missing_flags": missing_flags,
+            },
+        }
 
     def _normalize(self, img: np.ndarray, stats: Optional[dict] = None) -> np.ndarray:
-        """
-        Percentile clip + z-score normalization.
-
-        If per-patient stats are available, use them to avoid expensive percentile computation
-        in `__getitem__`.
-        """
         img = img.astype(np.float32, copy=False)
         if stats and all(k in stats for k in ("p1", "p99", "mean", "std")):
             p1 = float(stats["p1"])
